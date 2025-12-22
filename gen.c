@@ -46,8 +46,10 @@ typedef struct {
 Button wave_buttons[4];
 Button tool_buttons[13];
 Button control_buttons[2];
+Button export_button;           // New export button
 Button intensity_bar;
-Button smear_width_bar;  // New slider
+Button smear_width_bar;
+
 TTF_Font *font = NULL;
 
 float brush_intensity = 0.7f;
@@ -150,12 +152,70 @@ void init_buttons() {
     control_buttons[0] = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 160, 220, 70, "Play / Pause");
     control_buttons[1] = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 80, 260, 60, "Freq: 440.0 Hz");
 
+    // Export button (placed above Play/Pause)
+    export_button = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 240, 220, 60, "Export WAV");
+
     // Sliders
     intensity_bar = make_button(WINDOW_WIDTH - 340, WINDOW_HEIGHT - 240, 300, 25, "Intensity");
     smear_width_bar = make_button(WINDOW_WIDTH - 340, WINDOW_HEIGHT - 190, 300, 25, "Smear Width");
 }
 
-// Smear with adjustable copy length
+void export_wav() {
+    static int export_count = 0;
+    char filename[64];
+    FILE *test;
+
+    // Find the next available filename
+    do {
+        export_count++;
+        snprintf(filename, sizeof(filename), "waveform_%03d.wav", export_count);
+        test = fopen(filename, "rb");
+        if (test) fclose(test);
+    } while (test);  // Loop until we find a free name
+
+    FILE *f = fopen(filename, "wb");
+    if (!f) {
+        fprintf(stderr, "Could not open %s for writing\n", filename);
+        return;
+    }
+
+    uint32_t num_samples = buffer_samples;
+    uint32_t byte_rate = SAMPLE_RATE * 4;
+    uint32_t data_size = num_samples * 4;
+
+    // RIFF header
+    fwrite("RIFF", 1, 4, f);
+    uint32_t chunk_size = 36 + data_size;
+    fwrite(&chunk_size, 4, 1, f);
+    fwrite("WAVE", 1, 4, f);
+
+    // fmt subchunk
+    fwrite("fmt ", 1, 4, f);
+    uint32_t fmt_size = 16;
+    fwrite(&fmt_size, 4, 1, f);
+    uint16_t audio_format = 3;  // IEEE float
+    uint16_t num_channels = 1;
+    uint32_t sample_rate = SAMPLE_RATE;
+    uint16_t bits_per_sample = 32;
+    uint16_t block_align = 4;
+    fwrite(&audio_format, 2, 1, f);
+    fwrite(&num_channels, 2, 1, f);
+    fwrite(&sample_rate, 4, 1, f);
+    fwrite(&byte_rate, 4, 1, f);
+    fwrite(&block_align, 2, 1, f);
+    fwrite(&bits_per_sample, 2, 1, f);
+
+    // data subchunk
+    fwrite("data", 1, 4, f);
+    fwrite(&data_size, 4, 1, f);
+    fwrite(waveform_buffer, 4, num_samples, f);
+
+    fclose(f);
+
+    // Update button label to show confirmation
+    snprintf(export_button.label, 32, "Saved %03d.wav", export_count);
+}
+
 void apply_smear(int curr_idx) {
     if (smear_start_idx == -1) return;
 
@@ -174,8 +234,7 @@ void apply_smear(int curr_idx) {
 
     if (intensity <= 0.01f) return;
 
-    // Adjustable copy length: 50 to 400 samples
-    int copy_half_len = (int)(50 + smear_width * 350);  // 50 → 400
+    int copy_half_len = (int)(50 + smear_width * 350);
     int capture_start = smear_start_idx - copy_half_len;
     int capture_end = smear_start_idx + copy_half_len;
     capture_start = fmax(0, capture_start);
@@ -346,7 +405,7 @@ int main(int argc, char **argv) {
     font = TTF_OpenFont("/usr/share/fonts/TTF/DejaVuSans.ttf", 18);
     if (!font) fprintf(stderr, "Font not loaded.\n");
 
-    SDL_Window *window = SDL_CreateWindow("Waveform Editor - Smear Width Slider Added",
+    SDL_Window *window = SDL_CreateWindow("Waveform Editor - Export WAV Added",
                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                           WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
@@ -373,6 +432,8 @@ int main(int argc, char **argv) {
 
     SDL_bool running = SDL_TRUE;
     SDL_Event event;
+
+    static Uint32 export_time = 0;  // For resetting button label after 2 seconds
 
     while (running) {
         while (SDL_PollEvent(&event)) {
@@ -407,6 +468,12 @@ int main(int argc, char **argv) {
                     playing = !playing;
                     snprintf(control_buttons[0].label, 32, playing ? "Play / Pause" : "Paused");
                     if (playing) phase_accumulator = 0.0;
+                    button_clicked = 1;
+                }
+
+                if (SDL_PointInRect(&(SDL_Point){mx,my}, &export_button.rect)) {
+                    export_wav();
+                    export_time = SDL_GetTicks();
                     button_clicked = 1;
                 }
 
@@ -535,6 +602,12 @@ int main(int argc, char **argv) {
             }
         }
 
+        // Reset export button label after 2 seconds
+        if (export_time > 0 && SDL_GetTicks() - export_time > 2000) {
+            strncpy(export_button.label, "Export WAV", 31);
+            export_time = 0;
+        }
+
         if (current_type == CUSTOM)
             snprintf(control_buttons[1].label, 32, "CUSTOM - Smear Width Control!");
         else
@@ -573,6 +646,25 @@ int main(int argc, char **argv) {
         render_buttons(renderer, wave_buttons, 4, current_type);
         render_buttons(renderer, tool_buttons, 13, draw_mode);
         render_buttons(renderer, control_buttons, 2, playing ? 0 : -1);
+
+        // Render export button (custom color)
+        SDL_SetRenderDrawColor(renderer, 80, 180, 100, 255);
+        SDL_RenderFillRect(renderer, &export_button.rect);
+        SDL_SetRenderDrawColor(renderer, 220, 220, 255, 255);
+        SDL_RenderDrawRect(renderer, &export_button.rect);
+
+        if (font) {
+            SDL_Surface *surf = TTF_RenderText_Shaded(font, export_button.label, (SDL_Color){255,255,255,255}, (SDL_Color){0,0,0,0});
+            if (surf) {
+                SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+                SDL_Rect dst = {export_button.rect.x + (export_button.rect.w - surf->w)/2,
+                                export_button.rect.y + (export_button.rect.h - surf->h)/2,
+                                surf->w, surf->h};
+                SDL_RenderCopy(renderer, tex, NULL, &dst);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
 
         // Intensity bar
         SDL_SetRenderDrawColor(renderer, 70, 70, 100, 255);
