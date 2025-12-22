@@ -9,10 +9,10 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#define WINDOW_WIDTH 1150
-#define WINDOW_HEIGHT 700
-#define WAVEFORM_TOP 80
-#define WAVEFORM_HEIGHT 280
+#define WINDOW_WIDTH 1400
+#define WINDOW_HEIGHT 800
+#define WAVEFORM_TOP 100
+#define WAVEFORM_HEIGHT 340
 #define DISPLAY_DURATION 2.0
 #define SAMPLE_RATE 48000
 #define BUFFER_SAMPLES 1024
@@ -44,18 +44,22 @@ typedef struct {
 } Button;
 
 Button wave_buttons[4];
-Button tool_buttons[13];  // 13 tools now
+Button tool_buttons[13];
 Button control_buttons[2];
 Button intensity_bar;
+Button smear_width_bar;  // New slider
 TTF_Font *font = NULL;
 
 float brush_intensity = 0.7f;
+float smear_width = 0.5f;  // 0.0 to 1.0 → maps to 50 to 400 samples
 
 int drawing = 0;
 int line_start_idx = -1;
 float line_start_val = 0.0f;
 
-int prev_mouse_x = -1;
+int smear_start_idx = -1;
+int smear_current_idx = -1;
+float smear_max_distance = 0.0f;
 
 void generate_classic_waveform() {
     double total_cycles = current_freq * DISPLAY_DURATION;
@@ -114,73 +118,88 @@ Button make_button(int x, int y, int w, int h, const char *label) {
 }
 
 void init_buttons() {
-    int btn_w = 105, btn_h = 52;
-    int start_x = 30;
-    int y1 = WINDOW_HEIGHT - 220;
+    int btn_w = 95, btn_h = 48;
+    int spacing = 12;
+    int start_x = 40;
 
-    wave_buttons[0] = make_button(start_x + 0*(btn_w+15), y1, btn_w, btn_h, "Sine");
-    wave_buttons[1] = make_button(start_x + 1*(btn_w+15), y1, btn_w, btn_h, "Square");
-    wave_buttons[2] = make_button(start_x + 2*(btn_w+15), y1, btn_w, btn_h, "Sawtooth");
-    wave_buttons[3] = make_button(start_x + 3*(btn_w+15), y1, btn_w, btn_h, "Triangle");
+    int y1 = WINDOW_HEIGHT - 240;
+    wave_buttons[0] = make_button(start_x + 0*(btn_w + spacing), y1, btn_w, btn_h, "Sine");
+    wave_buttons[1] = make_button(start_x + 1*(btn_w + spacing), y1, btn_w, btn_h, "Square");
+    wave_buttons[2] = make_button(start_x + 2*(btn_w + spacing), y1, btn_w, btn_h, "Sawtooth");
+    wave_buttons[3] = make_button(start_x + 3*(btn_w + spacing), y1, btn_w, btn_h, "Triangle");
 
-    int y2 = WINDOW_HEIGHT - 155;
-    tool_buttons[0] = make_button(start_x + 0*(btn_w+15), y2, btn_w, btn_h, "Free Draw");
-    tool_buttons[1] = make_button(start_x + 1*(btn_w+15), y2, btn_w, btn_h, "Line");
-    tool_buttons[2] = make_button(start_x + 2*(btn_w+15), y2, btn_w, btn_h, "Sine Seg");
-    tool_buttons[3] = make_button(start_x + 3*(btn_w+15), y2, btn_w, btn_h, "Smooth");
-    tool_buttons[4] = make_button(start_x + 4*(btn_w+15), y2, btn_w, btn_h, "Add Free");
+    int y2 = WINDOW_HEIGHT - 180;
+    tool_buttons[0] = make_button(start_x + 0*(btn_w + spacing), y2, btn_w, btn_h, "Free Draw");
+    tool_buttons[1] = make_button(start_x + 1*(btn_w + spacing), y2, btn_w, btn_h, "Line");
+    tool_buttons[2] = make_button(start_x + 2*(btn_w + spacing), y2, btn_w, btn_h, "Sine Seg");
+    tool_buttons[3] = make_button(start_x + 3*(btn_w + spacing), y2, btn_w, btn_h, "Smooth");
+    tool_buttons[4] = make_button(start_x + 4*(btn_w + spacing), y2, btn_w, btn_h, "Add Free");
 
-    int y3 = WINDOW_HEIGHT - 85;
-    tool_buttons[5] = make_button(start_x + 0*(btn_w+15), y3, btn_w, btn_h, "Add Smooth");
-    tool_buttons[6] = make_button(start_x + 1*(btn_w+15), y3, btn_w, btn_h, "Multiply");
-    tool_buttons[7] = make_button(start_x + 2*(btn_w+15), y3, btn_w, btn_h, "Add Sine");
-    tool_buttons[8] = make_button(start_x + 3*(btn_w+15), y3, btn_w, btn_h, "Add Square");
-    tool_buttons[9] = make_button(start_x + 4*(btn_w+15), y3, btn_w, btn_h, "Add Saw");
+    int y3 = WINDOW_HEIGHT - 120;
+    tool_buttons[5] = make_button(start_x + 0*(btn_w + spacing), y3, btn_w, btn_h, "Add Smooth");
+    tool_buttons[6] = make_button(start_x + 1*(btn_w + spacing), y3, btn_w, btn_h, "Multiply");
+    tool_buttons[7] = make_button(start_x + 2*(btn_w + spacing), y3, btn_w, btn_h, "Add Sine");
+    tool_buttons[8] = make_button(start_x + 3*(btn_w + spacing), y3, btn_w, btn_h, "Add Square");
+    tool_buttons[9] = make_button(start_x + 4*(btn_w + spacing), y3, btn_w, btn_h, "Add Saw");
 
-    int y4 = WINDOW_HEIGHT - 15;
-    tool_buttons[10] = make_button(start_x + 0*(btn_w+15), y4, btn_w, btn_h, "Add Triangle");
-    tool_buttons[11] = make_button(start_x + 1*(btn_w+15), y4, btn_w, btn_h, "Blend");
-    tool_buttons[12] = make_button(start_x + 2*(btn_w+15), y4, btn_w, btn_h, "Smear");
+    int y4 = WINDOW_HEIGHT - 60;
+    tool_buttons[10] = make_button(start_x + 0*(btn_w + spacing), y4, btn_w, btn_h, "Add Tri");
+    tool_buttons[11] = make_button(start_x + 1*(btn_w + spacing), y4, btn_w, btn_h, "Blend");
+    tool_buttons[12] = make_button(start_x + 2*(btn_w + spacing), y4, btn_w, btn_h, "Smear");
 
-    control_buttons[0] = make_button(WINDOW_WIDTH - 260, WINDOW_HEIGHT - 140, 190, 60, "Play / Pause");
-    control_buttons[1] = make_button(WINDOW_WIDTH - 260, WINDOW_HEIGHT - 60, 240, 50, "Freq: 440.0 Hz");
+    control_buttons[0] = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 160, 220, 70, "Play / Pause");
+    control_buttons[1] = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 80, 260, 60, "Freq: 440.0 Hz");
 
-    intensity_bar = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 200, 250, 20, "Intensity");
+    // Sliders
+    intensity_bar = make_button(WINDOW_WIDTH - 340, WINDOW_HEIGHT - 240, 300, 25, "Intensity");
+    smear_width_bar = make_button(WINDOW_WIDTH - 340, WINDOW_HEIGHT - 190, 300, 25, "Smear Width");
 }
 
-// Additive classic waveforms — pitch from mouse Y
-void apply_additive_wave(int center_idx, float pitch_norm, int radius, int wave_type) {
-    float strength = brush_intensity * 0.8f;
-    int start = fmax(0, center_idx - radius);
-    int end = fmin(buffer_samples - 1, center_idx + radius);
+// Smear with adjustable copy length
+void apply_smear(int curr_idx) {
+    if (smear_start_idx == -1) return;
 
-    // Base frequency range: low at bottom, high at top
-    double base_freq = 50.0 + pitch_norm * 400.0;  // 50–450 Hz
+    int direction = (curr_idx > smear_start_idx) ? 1 : -1;
+    int current_distance = abs(curr_idx - smear_start_idx);
 
-    for (int i = start; i <= end; i++) {
-        float dist = fabsf(i - center_idx) / (float)radius;
-        if (dist >= 1.0f) continue;
-        float weight = strength * (1.0f - dist * dist);
+    if (current_distance < 30) return;
 
-        double pos = (i - start) / (double)(end - start + 1);
-        double phase = pos * 2.0 * M_PI;  // One cycle across brush
+    if (current_distance > smear_max_distance) {
+        smear_max_distance = current_distance;
+    }
 
-        float sample = 0.0f;
-        if (wave_type == 0) { // Sine
-            sample = (float)sin(phase + base_freq * pos * 0.1);
-        } else if (wave_type == 1) { // Square
-            sample = (fmod(phase * base_freq * 0.05, 2.0 * M_PI) < M_PI) ? 1.0f : -1.0f;
-        } else if (wave_type == 2) { // Saw
-            sample = (float)(2.0 * fmod(phase * base_freq * 0.05 / (2.0 * M_PI), 1.0) - 1.0);
-        } else if (wave_type == 3) { // Triangle
-            double tri = fmod(phase * base_freq * 0.05 / (2.0 * M_PI), 1.0);
-            sample = (tri < 0.5) ? (4.0f * tri - 1.0f) : (3.0f - 4.0f * tri);
+    float max_fade = buffer_samples * 0.35f;
+    float fade_factor = 1.0f - fmin(1.0f, smear_max_distance / max_fade);
+    float intensity = brush_intensity * fade_factor * 1.2f;
+
+    if (intensity <= 0.01f) return;
+
+    // Adjustable copy length: 50 to 400 samples
+    int copy_half_len = (int)(50 + smear_width * 350);  // 50 → 400
+    int capture_start = smear_start_idx - copy_half_len;
+    int capture_end = smear_start_idx + copy_half_len;
+    capture_start = fmax(0, capture_start);
+    capture_end = fmin(buffer_samples - 1, capture_end);
+    int copy_len = capture_end - capture_start + 1;
+
+    int paste_start = smear_start_idx + direction * current_distance;
+
+    for (int offset = 0; offset < copy_len; offset++) {
+        int src_idx = capture_start + offset;
+        int dst_idx = paste_start + offset * direction;
+
+        if (dst_idx < 0 || dst_idx >= buffer_samples) continue;
+
+        float dist_ratio = (float)abs(dst_idx - smear_start_idx) / (current_distance + copy_len);
+        float weight = intensity * (1.0f - dist_ratio);
+
+        if (weight > 0.01f) {
+            float copied = waveform_buffer[src_idx];
+            waveform_buffer[dst_idx] += copied * weight;
+
+            if (waveform_buffer[dst_idx] > AMPLITUDE) waveform_buffer[dst_idx] = AMPLITUDE;
+            if (waveform_buffer[dst_idx] < -AMPLITUDE) waveform_buffer[dst_idx] = -AMPLITUDE;
         }
-
-        waveform_buffer[i] += sample * weight * AMPLITUDE * 0.6f;
-
-        if (waveform_buffer[i] > AMPLITUDE) waveform_buffer[i] = AMPLITUDE;
-        if (waveform_buffer[i] < -AMPLITUDE) waveform_buffer[i] = -AMPLITUDE;
     }
 }
 
@@ -222,40 +241,34 @@ void apply_multiply(int center_idx, float factor, int radius) {
     }
 }
 
-// Additive Smear (preserves original)
-void apply_smear(int prev_idx, int curr_idx) {
-    if (abs(curr_idx - prev_idx) < 30) return;
+void apply_additive_wave(int center_idx, float pitch_norm, int radius, int wave_type) {
+    float strength = brush_intensity * 0.8f;
+    int start = fmax(0, center_idx - radius);
+    int end = fmin(buffer_samples - 1, center_idx + radius);
 
-    prev_idx = fmax(0, fmin(buffer_samples - 1, prev_idx));
-    curr_idx = fmax(0, fmin(buffer_samples - 1, curr_idx));
+    double base_freq = 50.0 + pitch_norm * 400.0;
 
-    int direction = (curr_idx > prev_idx) ? 1 : -1;
-    int distance = abs(curr_idx - prev_idx);
-    int radius = distance + 150;
+    for (int i = start; i <= end; i++) {
+        float dist = fabsf(i - center_idx) / (float)radius;
+        if (dist >= 1.0f) continue;
+        float weight = strength * (1.0f - dist * dist);
 
-    int center = (prev_idx + curr_idx) / 2;
-    int start = fmax(0, center - radius);
-    int end = fmin(buffer_samples - 1, center + radius);
-    int len = end - start + 1;
+        double pos = (i - start) / (double)(end - start + 1);
+        double phase = pos * 2.0 * M_PI;
 
-    static float temp[100000];
-    if (len > 100000) len = 100000;
+        float sample = 0.0f;
+        if (wave_type == 0) sample = (float)sin(phase + base_freq * pos * 0.1);
+        else if (wave_type == 1) sample = (fmod(phase * base_freq * 0.05, 2.0 * M_PI) < M_PI) ? 1.0f : -1.0f;
+        else if (wave_type == 2) sample = (float)(2.0 * fmod(phase * base_freq * 0.05 / (2.0 * M_PI), 1.0) - 1.0);
+        else if (wave_type == 3) {
+            double tri = fmod(phase * base_freq * 0.05 / (2.0 * M_PI), 1.0);
+            sample = (tri < 0.5) ? (4.0f * tri - 1.0f) : (3.0f - 4.0f * tri);
+        }
 
-    memcpy(temp, &waveform_buffer[start], len * sizeof(float));
+        waveform_buffer[i] += sample * weight * AMPLITUDE * 0.6f;
 
-    float intensity = brush_intensity * 0.8f;
-
-    for (int i = 0; i < len; i++) {
-        float t = i / (float)(len - 1);
-        int offset = direction * (int)(distance * (1.0f - t));
-        int src = i - offset;
-        src = fmax(0, fmin(len - 1, src));
-
-        float dragged_val = temp[src];
-        waveform_buffer[start + i] += dragged_val * intensity;
-
-        if (waveform_buffer[start + i] > AMPLITUDE) waveform_buffer[start + i] = AMPLITUDE;
-        if (waveform_buffer[start + i] < -AMPLITUDE) waveform_buffer[start + i] = -AMPLITUDE;
+        if (waveform_buffer[i] > AMPLITUDE) waveform_buffer[i] = AMPLITUDE;
+        if (waveform_buffer[i] < -AMPLITUDE) waveform_buffer[i] = -AMPLITUDE;
     }
 }
 
@@ -312,7 +325,7 @@ void render_buttons(SDL_Renderer *renderer, Button *buttons, int count, int acti
         SDL_RenderDrawRect(renderer, &b->rect);
 
         if (font) {
-            SDL_Surface *surf = TTF_RenderText_Blended(font, b->label, (SDL_Color){255,255,255,255});
+            SDL_Surface *surf = TTF_RenderText_Shaded(font, b->label, (SDL_Color){255,255,255,255}, (SDL_Color){0,0,0,0});
             if (surf) {
                 SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
                 SDL_Rect dst = {b->rect.x + (b->rect.w - surf->w)/2,
@@ -330,10 +343,10 @@ int main(int argc, char **argv) {
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
     TTF_Init();
 
-    font = TTF_OpenFont("/usr/share/fonts/TTF/DejaVuSans.ttf", 20);
+    font = TTF_OpenFont("/usr/share/fonts/TTF/DejaVuSans.ttf", 18);
     if (!font) fprintf(stderr, "Font not loaded.\n");
 
-    SDL_Window *window = SDL_CreateWindow("Waveform Editor - Basic Additive Waves",
+    SDL_Window *window = SDL_CreateWindow("Waveform Editor - Smear Width Slider Added",
                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                           WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
@@ -384,7 +397,8 @@ int main(int argc, char **argv) {
                     if (SDL_PointInRect(&(SDL_Point){mx,my}, &tool_buttons[i].rect)) {
                         draw_mode = (DrawMode)i;
                         line_start_idx = -1;
-                        prev_mouse_x = -1;
+                        smear_start_idx = -1;
+                        smear_max_distance = 0.0f;
                         button_clicked = 1;
                     }
                 }
@@ -400,6 +414,13 @@ int main(int argc, char **argv) {
                     brush_intensity = (mx - intensity_bar.rect.x) / (float)intensity_bar.rect.w;
                     if (brush_intensity < 0.0f) brush_intensity = 0.0f;
                     if (brush_intensity > 1.0f) brush_intensity = 1.0f;
+                    button_clicked = 1;
+                }
+
+                if (SDL_PointInRect(&(SDL_Point){mx,my}, &smear_width_bar.rect)) {
+                    smear_width = (mx - smear_width_bar.rect.x) / (float)smear_width_bar.rect.w;
+                    if (smear_width < 0.0f) smear_width = 0.0f;
+                    if (smear_width > 1.0f) smear_width = 1.0f;
                     button_clicked = 1;
                 }
 
@@ -429,7 +450,9 @@ int main(int argc, char **argv) {
                     } else {
                         drawing = 1;
                         if (draw_mode == DRAW_SMEAR) {
-                            prev_mouse_x = mx;
+                            smear_start_idx = idx;
+                            smear_current_idx = idx;
+                            smear_max_distance = 0.0f;
                         }
                     }
                 }
@@ -444,20 +467,25 @@ int main(int argc, char **argv) {
                     if (brush_intensity > 1.0f) brush_intensity = 1.0f;
                 }
 
+                if (SDL_PointInRect(&(SDL_Point){mx,my}, &smear_width_bar.rect)) {
+                    smear_width = (mx - smear_width_bar.rect.x) / (float)smear_width_bar.rect.w;
+                    if (smear_width < 0.0f) smear_width = 0.0f;
+                    if (smear_width > 1.0f) smear_width = 1.0f;
+                }
+
                 if (drawing) {
                     int idx = (int)((mx / (double)WINDOW_WIDTH) * buffer_samples);
 
                     if (draw_mode == DRAW_SMEAR) {
-                        int prev_idx = (prev_mouse_x == -1) ? idx : (int)((prev_mouse_x / (double)WINDOW_WIDTH) * buffer_samples);
-                        apply_smear(prev_idx, idx);
-                        prev_mouse_x = mx;
+                        smear_current_idx = idx;
+                        apply_smear(idx);
                     } else if (draw_mode >= DRAW_ADD_SINE && draw_mode <= DRAW_ADD_TRIANGLE) {
                         int wave_y_center = WAVEFORM_TOP + WAVEFORM_HEIGHT / 2;
                         double norm_y = (wave_y_center - my) / (WAVEFORM_HEIGHT * 0.9);
                         norm_y = fmax(-1.0, fmin(1.0, norm_y));
-                        float pitch_norm = (norm_y + 1.0) / 2.0;  // 0 to 1
+                        float pitch_norm = (norm_y + 1.0) / 2.0;
                         int radius = buffer_samples / WINDOW_WIDTH * 30;
-                        int wave_type = draw_mode - DRAW_ADD_SINE;  // 0=sine, 1=square, 2=saw, 3=triangle
+                        int wave_type = draw_mode - DRAW_ADD_SINE;
                         apply_additive_wave(idx, pitch_norm, radius, wave_type);
                     } else if (draw_mode != DRAW_LINE && draw_mode != DRAW_SINE) {
                         int wave_y_center = WAVEFORM_TOP + WAVEFORM_HEIGHT / 2;
@@ -478,7 +506,8 @@ int main(int argc, char **argv) {
             }
             else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
                 drawing = 0;
-                prev_mouse_x = -1;
+                smear_start_idx = -1;
+                smear_max_distance = 0.0f;
             }
 
             else if (event.type == SDL_KEYDOWN) {
@@ -507,7 +536,7 @@ int main(int argc, char **argv) {
         }
 
         if (current_type == CUSTOM)
-            snprintf(control_buttons[1].label, 32, "CUSTOM - Add basic waves!");
+            snprintf(control_buttons[1].label, 32, "CUSTOM - Smear Width Control!");
         else
             snprintf(control_buttons[1].label, 32, "Freq: %.1f Hz", current_freq);
 
@@ -555,23 +584,45 @@ int main(int argc, char **argv) {
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
         SDL_RenderDrawRect(renderer, &intensity_bar.rect);
 
+        // Smear Width bar
+        SDL_SetRenderDrawColor(renderer, 70, 70, 100, 255);
+        SDL_RenderFillRect(renderer, &smear_width_bar.rect);
+        SDL_SetRenderDrawColor(renderer, 255, 150, 100, 255);
+        fill = smear_width_bar.rect;
+        fill.w = (int)(fill.w * smear_width);
+        SDL_RenderFillRect(renderer, &fill);
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        SDL_RenderDrawRect(renderer, &smear_width_bar.rect);
+
         if (font) {
             char intens_text[32];
             snprintf(intens_text, 32, "Brush Intensity: %.0f%%", brush_intensity * 100);
-            SDL_Surface *surf = TTF_RenderText_Blended(font, intens_text, (SDL_Color){200,255,200,255});
+            SDL_Surface *surf = TTF_RenderText_Shaded(font, intens_text, (SDL_Color){200,255,200,255}, (SDL_Color){0,0,0,0});
             if (surf) {
                 SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
-                SDL_Rect r = {intensity_bar.rect.x, intensity_bar.rect.y - 30, surf->w, surf->h};
+                SDL_Rect r = {intensity_bar.rect.x, intensity_bar.rect.y - 35, surf->w, surf->h};
                 SDL_RenderCopy(renderer, tex, NULL, &r);
                 SDL_DestroyTexture(tex);
                 SDL_FreeSurface(surf);
             }
 
-            const char *inst = "Add Sine/Square/Saw/Triangle — layer basic waveforms additively!";
-            surf = TTF_RenderText_Blended(font, inst, (SDL_Color){100,255,200,255});
+            char width_text[32];
+            int copy_samples = (int)(50 + smear_width * 350);
+            snprintf(width_text, 32, "Smear Width: %d samples", copy_samples);
+            surf = TTF_RenderText_Shaded(font, width_text, (SDL_Color){255,200,100,255}, (SDL_Color){0,0,0,0});
             if (surf) {
                 SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
-                SDL_Rect r = {20, 45, surf->w, surf->h};
+                SDL_Rect r = {smear_width_bar.rect.x, smear_width_bar.rect.y - 35, surf->w, surf->h};
+                SDL_RenderCopy(renderer, tex, NULL, &r);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+
+            const char *inst = "SMEAR: New Width slider — control how much sound is copied!";
+            surf = TTF_RenderText_Shaded(font, inst, (SDL_Color){100,255,200,255}, (SDL_Color){0,0,0,0});
+            if (surf) {
+                SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+                SDL_Rect r = {20, 50, surf->w, surf->h};
                 SDL_RenderCopy(renderer, tex, NULL, &r);
                 SDL_DestroyTexture(tex);
                 SDL_FreeSurface(surf);
