@@ -24,7 +24,7 @@
 typedef enum { SINE, SQUARE, SAWTOOTH, TRIANGLE, CUSTOM } WaveType;
 typedef enum { 
     DRAW_FREE, DRAW_LINE, DRAW_SINE, DRAW_SMOOTH,
-    DRAW_ADD_FREE, DRAW_ADD_SMOOTH, DRAW_MULTIPLY,
+    DRAW_ADD_FREE, DRAW_ADD_SMOOTH, DRAW_MULTIPLY, DRAW_AMPLIFY,
     DRAW_ADD_SINE, DRAW_ADD_SQUARE, DRAW_ADD_SAW, DRAW_ADD_TRIANGLE,
     DRAW_BLEND, DRAW_SMEAR
 } DrawMode;
@@ -46,7 +46,7 @@ typedef struct {
 } Button;
 
 Button wave_buttons[4];
-Button tool_buttons[13];
+Button tool_buttons[14];  // Now 14 tools including Amplify
 Button control_buttons[2];
 Button export_button;
 Button intensity_bar;
@@ -155,67 +155,55 @@ Button make_button(int x, int y, int w, int h, const char *label) {
 }
 
 void init_buttons() {
-    // Measure text height once for consistent button sizing
-    int text_h = 18;  // Safe fallback
-    if (font) {
-        SDL_Surface *test_surf = TTF_RenderText_Shaded(font, "Free Draw",  // Longest typical label
-                                                      (SDL_Color){255,255,255,255},
-                                                      (SDL_Color){0,0,0,0});
-        if (test_surf) {
-            text_h = test_surf->h;
-            SDL_FreeSurface(test_surf);
-        }
-    }
-    int btn_h = text_h + 4;           // Exactly 2 px taller than text (2 px top + 2 px bottom)
-    int btn_w = 95;
-    int spacing_h = 8;                // Horizontal spacing between buttons in a row
-    int gap_v = 2;                    // Exactly 2 px gap between rows
-    int start_x = 40;
+    int btn_w = 105;
+    int left_btn_h = 18;                 // Text (~16px) + exactly 2px extra total
+    int spacing_horizontal = 15;
+    int start_x = 30;
 
-    // Calculate starting Y from bottom, tightly packed with 2px gaps
-    int total_rows_height = 4 * btn_h + 3 * gap_v;  // 4 rows, 3 gaps
-    int start_y = WINDOW_HEIGHT - total_rows_height - 20;  // 20 px margin from bottom
+    // Vertical spacing between rows: exactly 2px
+    int vertical_step = left_btn_h + 2;   // 18 + 2 = 20px from top of one row to top of next
 
-    // Row 1: Wave types
-    int y1 = start_y;
-    wave_buttons[0] = make_button(start_x + 0*(btn_w + spacing_h), y1, btn_w, btn_h, "Sine");
-    wave_buttons[1] = make_button(start_x + 1*(btn_w + spacing_h), y1, btn_w, btn_h, "Square");
-    wave_buttons[2] = make_button(start_x + 2*(btn_w + spacing_h), y1, btn_w, btn_h, "Sawtooth");
-    wave_buttons[3] = make_button(start_x + 3*(btn_w + spacing_h), y1, btn_w, btn_h, "Triangle");
+    // Anchor the bottom row (Row 3) near the bottom of the window
+    // Original bottom row started at WINDOW_HEIGHT - 15, we'll keep similar placement
+    int y4 = WINDOW_HEIGHT - 15;         // Top of bottom row
 
-    // Row 2: Tools
-    int y2 = y1 + btn_h + gap_v;
-    tool_buttons[0] = make_button(start_x + 0*(btn_w + spacing_h), y2, btn_w, btn_h, "Free Draw");
-    tool_buttons[1] = make_button(start_x + 1*(btn_w + spacing_h), y2, btn_w, btn_h, "Line");
-    tool_buttons[2] = make_button(start_x + 2*(btn_w + spacing_h), y2, btn_w, btn_h, "Sine Seg");
-    tool_buttons[3] = make_button(start_x + 3*(btn_w + spacing_h), y2, btn_w, btn_h, "Smooth");
-    tool_buttons[4] = make_button(start_x + 4*(btn_w + spacing_h), y2, btn_w, btn_h, "Add Free");
+    // Calculate upwards
+    int y3 = y4 - vertical_step;
+    int y2 = y3 - vertical_step;
+    int y1 = y2 - vertical_step;         // Wave buttons row
 
-    // Row 3: More tools
-    int y3 = y2 + btn_h + gap_v;
-    tool_buttons[5] = make_button(start_x + 0*(btn_w + spacing_h), y3, btn_w, btn_h, "Add Smooth");
-    tool_buttons[6] = make_button(start_x + 1*(btn_w + spacing_h), y3, btn_w, btn_h, "Multiply");
-    tool_buttons[7] = make_button(start_x + 2*(btn_w + spacing_h), y3, btn_w, btn_h, "Add Sine");
-    tool_buttons[8] = make_button(start_x + 3*(btn_w + spacing_h), y3, btn_w, btn_h, "Add Square");
-    tool_buttons[9] = make_button(start_x + 4*(btn_w + spacing_h), y3, btn_w, btn_h, "Add Saw");
+    // Wave types row
+    wave_buttons[0] = make_button(start_x + 0*(btn_w+spacing_horizontal), y1, btn_w, left_btn_h, "Sine");
+    wave_buttons[1] = make_button(start_x + 1*(btn_w+spacing_horizontal), y1, btn_w, left_btn_h, "Square");
+    wave_buttons[2] = make_button(start_x + 2*(btn_w+spacing_horizontal), y1, btn_w, left_btn_h, "Sawtooth");
+    wave_buttons[3] = make_button(start_x + 3*(btn_w+spacing_horizontal), y1, btn_w, left_btn_h, "Triangle");
 
-    // Row 4: Final tools
-    int y4 = y3 + btn_h + gap_v;
-    tool_buttons[10] = make_button(start_x + 0*(btn_w + spacing_h), y4, btn_w, btn_h, "Add Tri");
-    tool_buttons[11] = make_button(start_x + 1*(btn_w + spacing_h), y4, btn_w, btn_h, "Blend");
-    tool_buttons[12] = make_button(start_x + 2*(btn_w + spacing_h), y4, btn_w, btn_h, "Smear");
+    // Row 1
+    tool_buttons[0] = make_button(start_x + 0*(btn_w+spacing_horizontal), y2, btn_w, left_btn_h, "Free Draw");
+    tool_buttons[1] = make_button(start_x + 1*(btn_w+spacing_horizontal), y2, btn_w, left_btn_h, "Line");
+    tool_buttons[2] = make_button(start_x + 2*(btn_w+spacing_horizontal), y2, btn_w, left_btn_h, "Sine Seg");
+    tool_buttons[3] = make_button(start_x + 3*(btn_w+spacing_horizontal), y2, btn_w, left_btn_h, "Smooth");
+    tool_buttons[4] = make_button(start_x + 4*(btn_w+spacing_horizontal), y2, btn_w, left_btn_h, "Add Free");
 
-    // === Right-side controls (unchanged layout, safe from edge) ===
-    int right_x = WINDOW_WIDTH - 260;
-    int right_start_y = WINDOW_HEIGHT - 240;
-    int right_btn_h = 35;              // Keeping original taller style for right side
-    int right_spacing = 2;
+    // Row 2
+    tool_buttons[5] = make_button(start_x + 0*(btn_w+spacing_horizontal), y3, btn_w, left_btn_h, "Add Smooth");
+    tool_buttons[6] = make_button(start_x + 1*(btn_w+spacing_horizontal), y3, btn_w, left_btn_h, "Multiply");
+    tool_buttons[7] = make_button(start_x + 2*(btn_w+spacing_horizontal), y3, btn_w, left_btn_h, "Amplify");
+    tool_buttons[8] = make_button(start_x + 3*(btn_w+spacing_horizontal), y3, btn_w, left_btn_h, "Add Sine");
+    tool_buttons[9] = make_button(start_x + 4*(btn_w+spacing_horizontal), y3, btn_w, left_btn_h, "Add Square");
 
-    export_button = make_button(right_x, right_start_y, 240, right_btn_h, "Export WAV");
-    intensity_bar = make_button(right_x, right_start_y + right_btn_h + right_spacing, 240, 25, "Intensity");
-    smear_width_bar = make_button(right_x, right_start_y + right_btn_h + 25 + right_spacing * 2, 240, 25, "Smear Width");
-    control_buttons[0] = make_button(right_x, right_start_y + right_btn_h + 50 + right_spacing * 3, 240, right_btn_h, "Play / Pause");
-    control_buttons[1] = make_button(right_x, right_start_y + right_btn_h * 2 + 50 + right_spacing * 4, 240, right_btn_h, "Freq: 440.0 Hz");
+    // Row 3 (bottom row)
+    tool_buttons[10] = make_button(start_x + 0*(btn_w+spacing_horizontal), y4, btn_w, left_btn_h, "Add Saw");
+    tool_buttons[11] = make_button(start_x + 1*(btn_w+spacing_horizontal), y4, btn_w, left_btn_h, "Add Tri");
+    tool_buttons[12] = make_button(start_x + 2*(btn_w+spacing_horizontal), y4, btn_w, left_btn_h, "Blend");
+    tool_buttons[13] = make_button(start_x + 3*(btn_w+spacing_horizontal), y4, btn_w, left_btn_h, "Smear");
+
+    // Right-side controls — unchanged, keep their original larger sizes
+    control_buttons[0] = make_button(WINDOW_WIDTH - 260, WINDOW_HEIGHT - 140, 190, 60, "Play / Pause");
+    control_buttons[1] = make_button(WINDOW_WIDTH - 260, WINDOW_HEIGHT - 60, 240, 50, "Freq: 440.0 Hz");
+    export_button = make_button(WINDOW_WIDTH - 260, WINDOW_HEIGHT - 220, 240, 60, "Export WAV");
+    intensity_bar = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 200, 250, 20, "Intensity");
+    smear_width_bar = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 150, 250, 20, "Smear Width");
 }
 
 void export_wav() {
@@ -469,7 +457,7 @@ int main(int argc, char **argv) {
     font = TTF_OpenFont("/usr/share/fonts/TTF/DejaVuSans.ttf", 14);
     if (!font) fprintf(stderr, "Font not loaded.\n");
 
-    window = SDL_CreateWindow("Waveform Editor - Final Layout",
+    window = SDL_CreateWindow("Waveform Editor - Amplify Added",
                               SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                               INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT,
                               SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
@@ -537,7 +525,7 @@ int main(int argc, char **argv) {
                     }
                 }
 
-                for (int i = 0; i < 13; i++) {
+                for (int i = 0; i < 14; i++) {
                     if (SDL_PointInRect(&(SDL_Point){mx,my}, &tool_buttons[i].rect)) {
                         draw_mode = (DrawMode)i;
                         line_start_idx = -1;
@@ -633,6 +621,19 @@ int main(int argc, char **argv) {
                         int radius = buffer_samples / WINDOW_WIDTH * 30;
                         int wave_type = draw_mode - DRAW_ADD_SINE;
                         apply_additive_wave(idx, pitch_norm, radius, wave_type);
+                    } else if (draw_mode == DRAW_MULTIPLY || draw_mode == DRAW_AMPLIFY) {
+                        int wave_y_center = WAVEFORM_TOP + WAVEFORM_HEIGHT / 2;
+                        double norm_y = (wave_y_center - my) / (WAVEFORM_HEIGHT * 0.9);
+                        norm_y = fmax(-1.0, fmin(1.0, norm_y));
+
+                        float factor;
+                        if (draw_mode == DRAW_AMPLIFY) {
+                            factor = (norm_y > 0) ? (1.0f + norm_y * 3.0f) : (1.0f + norm_y * 0.8f);
+                        } else {
+                            factor = (norm_y > 0) ? 1.5f : 0.7f;
+                        }
+                        int radius = buffer_samples / WINDOW_WIDTH * 25;
+                        apply_multiply(idx, factor, radius);
                     } else if (draw_mode != DRAW_LINE && draw_mode != DRAW_SINE) {
                         int wave_y_center = WAVEFORM_TOP + WAVEFORM_HEIGHT / 2;
                         double norm_y = (wave_y_center - my) / (WAVEFORM_HEIGHT * 0.9);
@@ -658,7 +659,7 @@ int main(int argc, char **argv) {
         }
 
         if (current_type == CUSTOM)
-            snprintf(control_buttons[1].label, 32, "CUSTOM - All Fit!");
+            snprintf(control_buttons[1].label, 32, "CUSTOM - All Tools Ready!");
         else
             snprintf(control_buttons[1].label, 32, "Freq: %.1f Hz", current_freq);
 
@@ -693,7 +694,7 @@ int main(int argc, char **argv) {
         }
 
         render_buttons(renderer, wave_buttons, 4, current_type);
-        render_buttons(renderer, tool_buttons, 13, draw_mode);
+        render_buttons(renderer, tool_buttons, 14, draw_mode);
         render_buttons(renderer, control_buttons, 2, playing ? 0 : -1);
 
         // Export button
@@ -759,7 +760,7 @@ int main(int argc, char **argv) {
                 SDL_FreeSurface(surf);
             }
 
-            const char *inst = "Right side fixed — perfect layout!";
+            const char *inst = "Amplify tool added — brush up to boost volume!";
             surf = TTF_RenderText_Shaded(font, inst, (SDL_Color){100,255,200,255}, (SDL_Color){0,0,0,0});
             if (surf) {
                 SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
