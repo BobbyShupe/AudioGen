@@ -23,6 +23,7 @@ typedef enum { SINE, SQUARE, SAWTOOTH, TRIANGLE, CUSTOM } WaveType;
 typedef enum { 
     DRAW_FREE, DRAW_LINE, DRAW_SINE, DRAW_SMOOTH,
     DRAW_ADD_FREE, DRAW_ADD_SMOOTH, DRAW_MULTIPLY,
+    DRAW_AMPLIFY,                  // New mode
     DRAW_ADD_SINE, DRAW_ADD_SQUARE, DRAW_ADD_SAW, DRAW_ADD_TRIANGLE,
     DRAW_BLEND, DRAW_SMEAR
 } DrawMode;
@@ -44,16 +45,16 @@ typedef struct {
 } Button;
 
 Button wave_buttons[4];
-Button tool_buttons[13];
+Button tool_buttons[14];        // Increased to 14
 Button control_buttons[2];
-Button export_button;           // New export button
+Button export_button;
 Button intensity_bar;
 Button smear_width_bar;
 
 TTF_Font *font = NULL;
 
 float brush_intensity = 0.7f;
-float smear_width = 0.5f;  // 0.0 to 1.0 → maps to 50 to 400 samples
+float smear_width = 0.5f;
 
 int drawing = 0;
 int line_start_idx = -1;
@@ -140,38 +141,37 @@ void init_buttons() {
     int y3 = WINDOW_HEIGHT - 120;
     tool_buttons[5] = make_button(start_x + 0*(btn_w + spacing), y3, btn_w, btn_h, "Add Smooth");
     tool_buttons[6] = make_button(start_x + 1*(btn_w + spacing), y3, btn_w, btn_h, "Multiply");
-    tool_buttons[7] = make_button(start_x + 2*(btn_w + spacing), y3, btn_w, btn_h, "Add Sine");
-    tool_buttons[8] = make_button(start_x + 3*(btn_w + spacing), y3, btn_w, btn_h, "Add Square");
-    tool_buttons[9] = make_button(start_x + 4*(btn_w + spacing), y3, btn_w, btn_h, "Add Saw");
+    tool_buttons[7] = make_button(start_x + 2*(btn_w + spacing), y3, btn_w, btn_h, "Amplify");     // New
+    tool_buttons[8] = make_button(start_x + 3*(btn_w + spacing), y3, btn_w, btn_h, "Add Sine");
+    tool_buttons[9] = make_button(start_x + 4*(btn_w + spacing), y3, btn_w, btn_h, "Add Square");
 
     int y4 = WINDOW_HEIGHT - 60;
-    tool_buttons[10] = make_button(start_x + 0*(btn_w + spacing), y4, btn_w, btn_h, "Add Tri");
-    tool_buttons[11] = make_button(start_x + 1*(btn_w + spacing), y4, btn_w, btn_h, "Blend");
-    tool_buttons[12] = make_button(start_x + 2*(btn_w + spacing), y4, btn_w, btn_h, "Smear");
+    tool_buttons[10] = make_button(start_x + 0*(btn_w + spacing), y4, btn_w, btn_h, "Add Saw");
+    tool_buttons[11] = make_button(start_x + 1*(btn_w + spacing), y4, btn_w, btn_h, "Add Tri");
+    tool_buttons[12] = make_button(start_x + 2*(btn_w + spacing), y4, btn_w, btn_h, "Blend");
+    tool_buttons[13] = make_button(start_x + 3*(btn_w + spacing), y4, btn_w, btn_h, "Smear");
 
     control_buttons[0] = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 160, 220, 70, "Play / Pause");
     control_buttons[1] = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 80, 260, 60, "Freq: 440.0 Hz");
 
-    // Export button (placed above Play/Pause)
     export_button = make_button(WINDOW_WIDTH - 300, WINDOW_HEIGHT - 240, 220, 60, "Export WAV");
 
-    // Sliders
     intensity_bar = make_button(WINDOW_WIDTH - 340, WINDOW_HEIGHT - 240, 300, 25, "Intensity");
     smear_width_bar = make_button(WINDOW_WIDTH - 340, WINDOW_HEIGHT - 190, 300, 25, "Smear Width");
 }
 
 void export_wav() {
+	uint32_t sample_rate = SAMPLE_RATE;
     static int export_count = 0;
     char filename[64];
     FILE *test;
 
-    // Find the next available filename
     do {
         export_count++;
         snprintf(filename, sizeof(filename), "waveform_%03d.wav", export_count);
         test = fopen(filename, "rb");
         if (test) fclose(test);
-    } while (test);  // Loop until we find a free name
+    } while (test);
 
     FILE *f = fopen(filename, "wb");
     if (!f) {
@@ -183,19 +183,16 @@ void export_wav() {
     uint32_t byte_rate = SAMPLE_RATE * 4;
     uint32_t data_size = num_samples * 4;
 
-    // RIFF header
     fwrite("RIFF", 1, 4, f);
     uint32_t chunk_size = 36 + data_size;
     fwrite(&chunk_size, 4, 1, f);
     fwrite("WAVE", 1, 4, f);
 
-    // fmt subchunk
     fwrite("fmt ", 1, 4, f);
     uint32_t fmt_size = 16;
     fwrite(&fmt_size, 4, 1, f);
-    uint16_t audio_format = 3;  // IEEE float
+    uint16_t audio_format = 3;
     uint16_t num_channels = 1;
-    uint32_t sample_rate = SAMPLE_RATE;
     uint16_t bits_per_sample = 32;
     uint16_t block_align = 4;
     fwrite(&audio_format, 2, 1, f);
@@ -205,14 +202,12 @@ void export_wav() {
     fwrite(&block_align, 2, 1, f);
     fwrite(&bits_per_sample, 2, 1, f);
 
-    // data subchunk
     fwrite("data", 1, 4, f);
     fwrite(&data_size, 4, 1, f);
     fwrite(waveform_buffer, 4, num_samples, f);
 
     fclose(f);
 
-    // Update button label to show confirmation
     snprintf(export_button.label, 32, "Saved %03d.wav", export_count);
 }
 
@@ -405,7 +400,7 @@ int main(int argc, char **argv) {
     font = TTF_OpenFont("/usr/share/fonts/TTF/DejaVuSans.ttf", 18);
     if (!font) fprintf(stderr, "Font not loaded.\n");
 
-    SDL_Window *window = SDL_CreateWindow("Waveform Editor - Export WAV Added",
+    SDL_Window *window = SDL_CreateWindow("Waveform Editor - Amplify Tool Added",
                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                           WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN);
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
@@ -433,7 +428,7 @@ int main(int argc, char **argv) {
     SDL_bool running = SDL_TRUE;
     SDL_Event event;
 
-    static Uint32 export_time = 0;  // For resetting button label after 2 seconds
+    static Uint32 export_time = 0;
 
     while (running) {
         while (SDL_PollEvent(&event)) {
@@ -454,7 +449,7 @@ int main(int argc, char **argv) {
                     }
                 }
 
-                for (int i = 0; i < 13; i++) {
+                for (int i = 0; i < 14; i++) {            // 14 tools now
                     if (SDL_PointInRect(&(SDL_Point){mx,my}, &tool_buttons[i].rect)) {
                         draw_mode = (DrawMode)i;
                         line_start_idx = -1;
@@ -479,15 +474,13 @@ int main(int argc, char **argv) {
 
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &intensity_bar.rect)) {
                     brush_intensity = (mx - intensity_bar.rect.x) / (float)intensity_bar.rect.w;
-                    if (brush_intensity < 0.0f) brush_intensity = 0.0f;
-                    if (brush_intensity > 1.0f) brush_intensity = 1.0f;
+                    brush_intensity = fmax(0.0f, fmin(1.0f, brush_intensity));
                     button_clicked = 1;
                 }
 
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &smear_width_bar.rect)) {
                     smear_width = (mx - smear_width_bar.rect.x) / (float)smear_width_bar.rect.w;
-                    if (smear_width < 0.0f) smear_width = 0.0f;
-                    if (smear_width > 1.0f) smear_width = 1.0f;
+                    smear_width = fmax(0.0f, fmin(1.0f, smear_width));
                     button_clicked = 1;
                 }
 
@@ -530,14 +523,12 @@ int main(int argc, char **argv) {
 
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &intensity_bar.rect)) {
                     brush_intensity = (mx - intensity_bar.rect.x) / (float)intensity_bar.rect.w;
-                    if (brush_intensity < 0.0f) brush_intensity = 0.0f;
-                    if (brush_intensity > 1.0f) brush_intensity = 1.0f;
+                    brush_intensity = fmax(0.0f, fmin(1.0f, brush_intensity));
                 }
 
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &smear_width_bar.rect)) {
                     smear_width = (mx - smear_width_bar.rect.x) / (float)smear_width_bar.rect.w;
-                    if (smear_width < 0.0f) smear_width = 0.0f;
-                    if (smear_width > 1.0f) smear_width = 1.0f;
+                    smear_width = fmax(0.0f, fmin(1.0f, smear_width));
                 }
 
                 if (drawing) {
@@ -554,6 +545,20 @@ int main(int argc, char **argv) {
                         int radius = buffer_samples / WINDOW_WIDTH * 30;
                         int wave_type = draw_mode - DRAW_ADD_SINE;
                         apply_additive_wave(idx, pitch_norm, radius, wave_type);
+                    } else if (draw_mode == DRAW_MULTIPLY || draw_mode == DRAW_AMPLIFY) {
+                        int wave_y_center = WAVEFORM_TOP + WAVEFORM_HEIGHT / 2;
+                        double norm_y = (wave_y_center - my) / (WAVEFORM_HEIGHT * 0.9);
+                        norm_y = fmax(-1.0, fmin(1.0, norm_y));
+
+                        float factor;
+                        if (draw_mode == DRAW_AMPLIFY) {
+                            // Wider, more sensitive range
+                            factor = (norm_y > 0) ? (1.0f + norm_y * 2.5f) : (1.0f + norm_y * 0.6f);
+                        } else {
+                            factor = (norm_y > 0) ? 1.5f : 0.7f;
+                        }
+                        int radius = buffer_samples / WINDOW_WIDTH * 25;
+                        apply_multiply(idx, factor, radius);
                     } else if (draw_mode != DRAW_LINE && draw_mode != DRAW_SINE) {
                         int wave_y_center = WAVEFORM_TOP + WAVEFORM_HEIGHT / 2;
                         double norm_y = (wave_y_center - my) / (WAVEFORM_HEIGHT * 0.9);
@@ -562,12 +567,7 @@ int main(int argc, char **argv) {
                         int radius = buffer_samples / WINDOW_WIDTH * ((draw_mode == DRAW_SMOOTH || draw_mode == DRAW_ADD_SMOOTH || draw_mode == DRAW_BLEND) ? 25 : 15);
                         float strength = (draw_mode == DRAW_SMOOTH || draw_mode == DRAW_ADD_SMOOTH || draw_mode == DRAW_BLEND) ? 0.6f : 1.0f;
                         int mode = (draw_mode == DRAW_BLEND) ? 2 : (draw_mode == DRAW_ADD_FREE || draw_mode == DRAW_ADD_SMOOTH) ? 1 : 0;
-                        if (draw_mode == DRAW_MULTIPLY) {
-                            float factor = (norm_y > 0) ? 1.5f : 0.7f;
-                            apply_multiply(idx, factor, radius);
-                        } else {
-                            apply_brush(idx, value, radius, strength, mode);
-                        }
+                        apply_brush(idx, value, radius, strength, mode);
                     }
                 }
             }
@@ -602,7 +602,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Reset export button label after 2 seconds
         if (export_time > 0 && SDL_GetTicks() - export_time > 2000) {
             strncpy(export_button.label, "Export WAV", 31);
             export_time = 0;
@@ -644,10 +643,9 @@ int main(int argc, char **argv) {
         }
 
         render_buttons(renderer, wave_buttons, 4, current_type);
-        render_buttons(renderer, tool_buttons, 13, draw_mode);
+        render_buttons(renderer, tool_buttons, 14, draw_mode);     // 14 tools
         render_buttons(renderer, control_buttons, 2, playing ? 0 : -1);
 
-        // Render export button (custom color)
         SDL_SetRenderDrawColor(renderer, 80, 180, 100, 255);
         SDL_RenderFillRect(renderer, &export_button.rect);
         SDL_SetRenderDrawColor(renderer, 220, 220, 255, 255);
@@ -666,7 +664,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Intensity bar
         SDL_SetRenderDrawColor(renderer, 70, 70, 100, 255);
         SDL_RenderFillRect(renderer, &intensity_bar.rect);
         SDL_SetRenderDrawColor(renderer, 100, 200, 255, 255);
@@ -676,7 +673,6 @@ int main(int argc, char **argv) {
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
         SDL_RenderDrawRect(renderer, &intensity_bar.rect);
 
-        // Smear Width bar
         SDL_SetRenderDrawColor(renderer, 70, 70, 100, 255);
         SDL_RenderFillRect(renderer, &smear_width_bar.rect);
         SDL_SetRenderDrawColor(renderer, 255, 150, 100, 255);
