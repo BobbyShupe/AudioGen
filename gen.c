@@ -24,7 +24,8 @@ typedef enum {
     DRAW_FREE, DRAW_LINE, DRAW_SINE, DRAW_SMOOTH,
     DRAW_ADD_FREE, DRAW_ADD_SMOOTH, DRAW_MULTIPLY, DRAW_AMPLIFY,
     DRAW_ADD_SINE, DRAW_ADD_SQUARE, DRAW_ADD_SAW, DRAW_ADD_TRIANGLE,
-    DRAW_BLEND, DRAW_SMEAR, DRAW_SOFTEN
+    DRAW_BLEND, DRAW_SMEAR, DRAW_SOFTEN,
+    DRAW_ADD_TREBLE, DRAW_ADD_MID, DRAW_SUB_BASS        // New EQ-style tools
 } DrawMode;
 
 WaveType current_type = SINE;
@@ -44,7 +45,7 @@ typedef struct {
 } Button;
 
 Button wave_buttons[4];
-Button tool_buttons[15];
+Button tool_buttons[18];            // 15 original + 3 new = 18
 Button control_buttons[2];
 Button export_button;
 Button intensity_bar;
@@ -176,19 +177,23 @@ void init_buttons() {
 
     int left_x = margin;
 
+    // Wave type buttons
     wave_buttons[0] = make_button(left_x + 0*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Sine");
     wave_buttons[1] = make_button(left_x + 1*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Square");
     wave_buttons[2] = make_button(left_x + 2*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Sawtooth");
     wave_buttons[3] = make_button(left_x + 3*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Triangle");
 
+    // Row 1
     const char* row1_labels[5] = {"Free Draw", "Line", "Sine Seg", "Smooth", "Add Free"};
     for (int i = 0; i < 5; i++) tool_buttons[i] = make_button(left_x + i*(btn_w+spacing_h), row_y[1], btn_w, btn_h, row1_labels[i]);
 
+    // Row 2
     const char* row2_labels[5] = {"Add Smooth", "Multiply", "Amplify", "Add Sine", "Add Square"};
     for (int i = 0; i < 5; i++) tool_buttons[5+i] = make_button(left_x + i*(btn_w+spacing_h), row_y[2], btn_w, btn_h, row2_labels[i]);
 
-    const char* row3_labels[5] = {"Add Saw", "Add Tri", "Blend", "Smear", "Soften"};
-    for (int i = 0; i < 5; i++) tool_buttons[10+i] = make_button(left_x + i*(btn_w+spacing_h), row_y[3], btn_w, btn_h, row3_labels[i]);
+    // Row 3 - now 8 buttons including new EQ tools
+    const char* row3_labels[8] = {"Add Saw", "Add Tri", "Blend", "Smear", "Soften", "Add Treb", "Add Mid", "Sub Bass"};
+    for (int i = 0; i < 8; i++) tool_buttons[10+i] = make_button(left_x + i*(btn_w+spacing_h), row_y[3], btn_w, btn_h, row3_labels[i]);
 
     int right_margin = margin + 20;
     int control_w = 240;
@@ -237,7 +242,7 @@ void export_wav() {
     fwrite("fmt ", 1, 4, f);
     uint32_t fmt_size = 16;
     fwrite(&fmt_size, 4, 1, f);
-    uint16_t audio_format = 3; // IEEE float
+    uint16_t audio_format = 3;
     uint16_t num_channels = 1;
     uint16_t bits_per_sample = 32;
     uint16_t block_align = 4;
@@ -348,11 +353,11 @@ void apply_additive_wave(int center_idx, float pitch_norm, int radius, int wave_
     }
 }
 
-// FIXED & FAST Soften: pure low-pass smoothing, no silencing, no lag
+// Fast, safe low-pass soften (no silencing, no lag)
 void apply_lowpass_soften(int center_idx, float strength) {
     if (strength < 0.05f) return;
 
-    int kernel = (int)(6 + strength * 20);  // 6 to ~26 samples wide
+    int kernel = (int)(6 + strength * 20);  // 6–26 samples
     int start = fmax(0, center_idx - 40);
     int end = fmin(buffer_samples - 1, center_idx + 40);
 
@@ -364,20 +369,72 @@ void apply_lowpass_soften(int center_idx, float strength) {
         float sum = waveform_buffer[i];
         float wsum = 1.0f;
         for (int j = 1; j <= kernel; j++) {
-            if (i - j >= 0) {
-                float w = 1.0f - (float)j / (kernel + 1);
-                sum += waveform_buffer[i - j] * w;
-                wsum += w;
-            }
-            if (i + j < buffer_samples) {
-                float w = 1.0f - (float)j / (kernel + 1);
-                sum += waveform_buffer[i + j] * w;
-                wsum += w;
-            }
+            if (i - j >= 0) { float w = 1.0f - (float)j / (kernel + 1); sum += waveform_buffer[i - j] * w; wsum += w; }
+            if (i + j < buffer_samples) { float w = 1.0f - (float)j / (kernel + 1); sum += waveform_buffer[i + j] * w; wsum += w; }
         }
         float smoothed = sum / wsum;
         waveform_buffer[i] = waveform_buffer[i] * (1.0f - envelope) + smoothed * envelope;
+        if (waveform_buffer[i] > AMPLITUDE) waveform_buffer[i] = AMPLITUDE;
+        if (waveform_buffer[i] < -AMPLITUDE) waveform_buffer[i] = -AMPLITUDE;
     }
+}
+
+// Simple 1-pole shelving filter brush
+void apply_shelving_brush(int center_idx, float gain_factor, float cutoff_norm, int is_low_shelf) {
+    float strength = brush_intensity * gain_factor;
+    if (strength < 0.02f) return;
+
+    int radius = buffer_samples / current_window_width * 40;
+    int start = fmax(0, center_idx - radius);
+    int end = fmin(buffer_samples - 1, center_idx + radius);
+
+    float alpha = cutoff_norm;  // 0.1 = low, 0.9 = high
+    if (is_low_shelf) alpha = 1.0f - alpha;
+
+    float y1 = 0.0f;
+
+    for (int i = start; i <= end; i++) {
+        float dist = fabsf(i - center_idx) / (float)radius;
+        if (dist >= 1.0f) continue;
+        float weight = strength * (1.0f - dist * dist);
+
+        float x = waveform_buffer[i];
+        float y = alpha * x + (1.0f - alpha) * y1;
+        y1 = y;
+
+        float filtered = is_low_shelf ? y : (x - y);
+        waveform_buffer[i] += filtered * weight;
+
+        if (waveform_buffer[i] > AMPLITUDE) waveform_buffer[i] = AMPLITUDE;
+        if (waveform_buffer[i] < -AMPLITUDE) waveform_buffer[i] = -AMPLITUDE;
+    }
+}
+
+void apply_add_treble(int center_idx, float mouse_strength) {
+    float gain = 0.6f + mouse_strength * 1.2f;  // +6 to +18 dB feel
+    apply_shelving_brush(center_idx, gain, 0.85f, 0);  // high shelf boost
+}
+
+void apply_add_mid(int center_idx, float mouse_strength) {
+    float boost = 0.4f + mouse_strength * 0.8f;
+    int radius = buffer_samples / current_window_width * 50;
+    int start = fmax(0, center_idx - radius);
+    int end = fmin(buffer_samples - 1, center_idx + radius);
+
+    for (int i = start; i <= end; i++) {
+        float dist = fabsf(i - center_idx) / (float)radius;
+        if (dist >= 1.0f) continue;
+        float weight = boost * brush_intensity * (1.0f - dist * dist);
+        waveform_buffer[i] *= (1.0f + weight);
+        if (waveform_buffer[i] > AMPLITUDE) waveform_buffer[i] = AMPLITUDE;
+        if (waveform_buffer[i] < -AMPLITUDE) waveform_buffer[i] = -AMPLITUDE;
+    }
+}
+
+void apply_sub_bass(int center_idx, float mouse_strength) {
+    float gain = 0.7f + mouse_strength * 1.3f;
+    apply_shelving_brush(center_idx, gain, 0.15f, 1);   // low shelf boost
+    apply_shelving_brush(center_idx, -0.3f - mouse_strength * 0.4f, 0.7f, 0); // gentle high cut
 }
 
 void draw_line(int start_idx, float start_val, int end_idx, float end_val) {
@@ -491,7 +548,7 @@ int main(int argc, char **argv) {
                 for (int i = 0; i < 4; i++) if (SDL_PointInRect(&(SDL_Point){mx,my}, &wave_buttons[i].rect)) {
                     current_type = (WaveType)i; generate_classic_waveform(); phase_accumulator = 0.0; button_clicked = 1;
                 }
-                for (int i = 0; i < 15; i++) if (SDL_PointInRect(&(SDL_Point){mx,my}, &tool_buttons[i].rect)) {
+                for (int i = 0; i < 18; i++) if (SDL_PointInRect(&(SDL_Point){mx,my}, &tool_buttons[i].rect)) {
                     draw_mode = (DrawMode)i; line_start_idx = -1; smear_start_idx = -1; smear_max_distance = 0.0f; button_clicked = 1;
                 }
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &control_buttons[0].rect)) {
@@ -547,33 +604,42 @@ int main(int argc, char **argv) {
                 int waveform_height = (int)(current_window_height * WAVEFORM_HEIGHT_RATIO);
                 if (drawing && my >= waveform_top && my < waveform_top + waveform_height) {
                     int idx = (int)((mx / (double)current_window_width) * buffer_samples);
+                    int wave_y_center = waveform_top + waveform_height / 2;
+                    double norm_y = (wave_y_center - my) / (waveform_height * 0.9);
+                    norm_y = fmax(-1.0, fmin(1.0, norm_y));
+                    float mouse_strength = (norm_y > 0.0f) ? norm_y : 0.3f;  // stronger when brushing upward
 
-                    if (draw_mode == DRAW_SMEAR) { smear_current_idx = idx; apply_smear(idx); }
+                    if (draw_mode == DRAW_SMEAR) {
+                        smear_current_idx = idx;
+                        apply_smear(idx);
+                    }
                     else if (draw_mode >= DRAW_ADD_SINE && draw_mode <= DRAW_ADD_TRIANGLE) {
-                        double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
-                        norm_y = fmax(-1.0, fmin(1.0, norm_y));
                         float pitch_norm = (norm_y + 1.0) / 2.0;
                         int radius = buffer_samples / current_window_width * 30;
                         int wave_type = draw_mode - DRAW_ADD_SINE;
                         apply_additive_wave(idx, pitch_norm, radius, wave_type);
                     }
                     else if (draw_mode == DRAW_MULTIPLY || draw_mode == DRAW_AMPLIFY) {
-                        double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
-                        norm_y = fmax(-1.0, fmin(1.0, norm_y));
-                        float factor = (draw_mode == DRAW_AMPLIFY) ? (norm_y > 0 ? 1.0f + norm_y * 3.0f : 1.0f + norm_y * 0.8f) : (norm_y > 0 ? 1.5f : 0.7f);
+                        float factor = (draw_mode == DRAW_AMPLIFY)
+                            ? (norm_y > 0 ? 1.0f + norm_y * 3.0f : 1.0f + norm_y * 0.8f)
+                            : (norm_y > 0 ? 1.5f : 0.7f);
                         int radius = buffer_samples / current_window_width * 25;
                         apply_multiply(idx, factor, radius);
                     }
                     else if (draw_mode == DRAW_SOFTEN) {
-                        double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
-                        norm_y = fmax(-1.0, fmin(1.0, norm_y));
-                        float mouse_strength = (norm_y < 0.0f) ? (1.0f - norm_y) : 0.4f;  // stronger below center
-                        float total_strength = brush_intensity * mouse_strength;
-                        apply_lowpass_soften(idx, total_strength);
+                        float soften_strength = brush_intensity * (norm_y < 0 ? (1.0f - norm_y) : 0.5f);
+                        apply_lowpass_soften(idx, soften_strength);
+                    }
+                    else if (draw_mode == DRAW_ADD_TREBLE) {
+                        apply_add_treble(idx, mouse_strength);
+                    }
+                    else if (draw_mode == DRAW_ADD_MID) {
+                        apply_add_mid(idx, mouse_strength);
+                    }
+                    else if (draw_mode == DRAW_SUB_BASS) {
+                        apply_sub_bass(idx, mouse_strength);
                     }
                     else if (draw_mode != DRAW_LINE && draw_mode != DRAW_SINE) {
-                        double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
-                        norm_y = fmax(-1.0, fmin(1.0, norm_y));
                         float value = (float)(norm_y * AMPLITUDE * 0.8);
                         int radius = buffer_samples / current_window_width * ((draw_mode == DRAW_SMOOTH || draw_mode == DRAW_ADD_SMOOTH || draw_mode == DRAW_BLEND) ? 25 : 15);
                         float bstrength = (draw_mode == DRAW_SMOOTH || draw_mode == DRAW_ADD_SMOOTH || draw_mode == DRAW_BLEND) ? 0.6f : 1.0f;
@@ -631,7 +697,7 @@ int main(int argc, char **argv) {
         }
 
         render_buttons(renderer, wave_buttons, 4, current_type);
-        render_buttons(renderer, tool_buttons, 15, draw_mode);
+        render_buttons(renderer, tool_buttons, 18, draw_mode);
         render_buttons(renderer, control_buttons, 2, playing ? 0 : -1);
 
         SDL_SetRenderDrawColor(renderer, 80, 180, 100, 255);
@@ -649,7 +715,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        // bars
         SDL_SetRenderDrawColor(renderer, 70, 70, 100, 255);
         SDL_RenderFillRect(renderer, &intensity_bar.rect);
         SDL_SetRenderDrawColor(renderer, 100, 200, 255, 255);
@@ -668,8 +733,12 @@ int main(int argc, char **argv) {
             SDL_Surface *surf = TTF_RenderText_Shaded(font, txt, (SDL_Color){200,255,200,255}, (SDL_Color){0,0,0,0});
             if (surf) { SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf); SDL_Rect r = {intensity_bar.rect.x, intensity_bar.rect.y - 30, surf->w, surf->h}; SDL_RenderCopy(renderer, tex, NULL, &r); SDL_DestroyTexture(tex); SDL_FreeSurface(surf); }
 
-            const char *hint = "Soften: brush lower = stronger treble reduction (smooth & safe now!)";
-            surf = TTF_RenderText_Shaded(font, hint, (SDL_Color){255,200,100,255}, (SDL_Color){0,0,0,0});
+            const char *hint1 = "EQ Tools: brush higher = stronger effect";
+            surf = TTF_RenderText_Shaded(font, hint1, (SDL_Color){255,255,150,255}, (SDL_Color){0,0,0,0});
+            if (surf) { SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf); SDL_Rect r = {20, 50, surf->w, surf->h}; SDL_RenderCopy(renderer, tex, NULL, &r); SDL_DestroyTexture(tex); SDL_FreeSurface(surf); }
+
+            const char *hint2 = "Add Treb | Add Mid | Sub Bass | Soften";
+            surf = TTF_RenderText_Shaded(font, hint2, (SDL_Color){150,255,255,255}, (SDL_Color){0,0,0,0});
             if (surf) { SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf); SDL_Rect r = {20, 80, surf->w, surf->h}; SDL_RenderCopy(renderer, tex, NULL, &r); SDL_DestroyTexture(tex); SDL_FreeSurface(surf); }
         }
 
