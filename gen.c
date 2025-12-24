@@ -18,6 +18,7 @@
 
 #define WAVEFORM_TOP_MARGIN_RATIO 0.12
 #define WAVEFORM_HEIGHT_RATIO 0.55
+#define UNDO_LEVELS 32
 
 typedef enum { SINE, SQUARE, SAWTOOTH, TRIANGLE, CUSTOM } WaveType;
 typedef enum { 
@@ -25,7 +26,7 @@ typedef enum {
     DRAW_ADD_FREE, DRAW_ADD_SMOOTH, DRAW_MULTIPLY, DRAW_AMPLIFY,
     DRAW_ADD_SINE, DRAW_ADD_SQUARE, DRAW_ADD_SAW, DRAW_ADD_TRIANGLE,
     DRAW_BLEND, DRAW_SMEAR, DRAW_SOFTEN,
-    DRAW_ADD_TREBLE, DRAW_ADD_MID, DRAW_SUB_BASS        // New EQ-style tools
+    DRAW_ADD_TREBLE, DRAW_ADD_MID, DRAW_SUB_BASS
 } DrawMode;
 
 WaveType current_type = SINE;
@@ -39,19 +40,26 @@ double phase_increment = 0.0;
 float *waveform_buffer = NULL;
 int buffer_samples = 0;
 
+// Undo/Redo
+float *undo_stack[UNDO_LEVELS];
+int undo_index = 0;
+int undo_count = 0;
+
+TTF_Font *font = NULL;
+
 typedef struct {
     SDL_Rect rect;
     char label[32];
 } Button;
 
 Button wave_buttons[4];
-Button tool_buttons[18];            // 15 original + 3 new = 18
+Button tool_buttons[18];
 Button control_buttons[2];
 Button export_button;
 Button intensity_bar;
 Button smear_width_bar;
-
-TTF_Font *font = NULL;
+Button undo_button;      // NEW
+Button redo_button;      // NEW
 
 float brush_intensity = 0.7f;
 float smear_width = 0.5f;
@@ -74,8 +82,9 @@ int fullscreen = 0;
 int current_window_width = INITIAL_WINDOW_WIDTH;
 int current_window_height = INITIAL_WINDOW_HEIGHT;
 
-void reopen_audio_device(void);
-void audio_callback(void *userdata, Uint8 *stream, int len);
+void save_undo_state(void);
+void undo(void);
+void redo(void);
 
 void generate_classic_waveform() {
     double total_cycles = current_freq * DISPLAY_DURATION;
@@ -98,6 +107,8 @@ void generate_classic_waveform() {
         }
         waveform_buffer[i] = (float)(sample * AMPLITUDE);
     }
+    undo_count = 0;
+    undo_index = 0;
 }
 
 void audio_callback(void *userdata, Uint8 *stream, int len) {
@@ -177,21 +188,17 @@ void init_buttons() {
 
     int left_x = margin;
 
-    // Wave type buttons
     wave_buttons[0] = make_button(left_x + 0*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Sine");
     wave_buttons[1] = make_button(left_x + 1*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Square");
     wave_buttons[2] = make_button(left_x + 2*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Sawtooth");
     wave_buttons[3] = make_button(left_x + 3*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Triangle");
 
-    // Row 1
     const char* row1_labels[5] = {"Free Draw", "Line", "Sine Seg", "Smooth", "Add Free"};
     for (int i = 0; i < 5; i++) tool_buttons[i] = make_button(left_x + i*(btn_w+spacing_h), row_y[1], btn_w, btn_h, row1_labels[i]);
 
-    // Row 2
     const char* row2_labels[5] = {"Add Smooth", "Multiply", "Amplify", "Add Sine", "Add Square"};
     for (int i = 0; i < 5; i++) tool_buttons[5+i] = make_button(left_x + i*(btn_w+spacing_h), row_y[2], btn_w, btn_h, row2_labels[i]);
 
-    // Row 3 - now 8 buttons including new EQ tools
     const char* row3_labels[8] = {"Add Saw", "Add Tri", "Blend", "Smear", "Soften", "Add Treb", "Add Mid", "Sub Bass"};
     for (int i = 0; i < 8; i++) tool_buttons[10+i] = make_button(left_x + i*(btn_w+spacing_h), row_y[3], btn_w, btn_h, row3_labels[i]);
 
@@ -204,9 +211,12 @@ void init_buttons() {
     int right_x = current_window_width - right_margin - control_w;
 
     export_button = make_button(right_x, waveform_top + 20, control_w, control_h, "Export WAV");
-
     control_buttons[0] = make_button(right_x, current_window_height - margin - control_h - 80, control_w, control_h, "Play / Pause");
     control_buttons[1] = make_button(right_x, current_window_height - margin - control_h, control_w + 50, 50, "Freq: 440.0 Hz");
+
+    // NEW: Undo and Redo buttons (below Play/Pause)
+    undo_button = make_button(right_x, control_buttons[0].rect.y + control_h + 10, 115, 40, "Undo");
+    redo_button = make_button(right_x + 125, control_buttons[0].rect.y + control_h + 10, 115, 40, "Redo");
 
     intensity_bar = make_button(current_window_width - right_margin - bar_w, export_button.rect.y + control_h + 30, bar_w, bar_h, "Intensity");
     smear_width_bar = make_button(current_window_width - right_margin - bar_w, intensity_bar.rect.y + bar_h + 20, bar_w, bar_h, "Smear Width");
@@ -258,6 +268,35 @@ void export_wav() {
 
     fclose(f);
     snprintf(export_button.label, 32, "Saved %03d.wav", export_count);
+}
+
+void save_undo_state(void) {
+    if (current_type != CUSTOM) return;
+
+    int next = (undo_index + 1) % UNDO_LEVELS;
+    if (undo_stack[next] == NULL) {
+        undo_stack[next] = malloc(buffer_samples * sizeof(float));
+    }
+    memcpy(undo_stack[next], waveform_buffer, buffer_samples * sizeof(float));
+    undo_index = next;
+    if (undo_count < UNDO_LEVELS) undo_count++;
+}
+
+void undo(void) {
+    if (undo_count <= 0) return;
+    int prev = (undo_index - 1 + UNDO_LEVELS) % UNDO_LEVELS;
+    memcpy(waveform_buffer, undo_stack[prev], buffer_samples * sizeof(float));
+    undo_index = prev;
+    undo_count--;
+}
+
+void redo(void) {
+    if (undo_count >= UNDO_LEVELS) return;
+    int next = (undo_index + 1) % UNDO_LEVELS;
+    if (undo_stack[next] == NULL) return;
+    memcpy(waveform_buffer, undo_stack[next], buffer_samples * sizeof(float));
+    undo_index = next;
+    undo_count++;
 }
 
 void apply_smear(int curr_idx) {
@@ -353,19 +392,15 @@ void apply_additive_wave(int center_idx, float pitch_norm, int radius, int wave_
     }
 }
 
-// Fast, safe low-pass soften (no silencing, no lag)
 void apply_lowpass_soften(int center_idx, float strength) {
     if (strength < 0.05f) return;
-
-    int kernel = (int)(6 + strength * 20);  // 6–26 samples
+    int kernel = (int)(6 + strength * 20);
     int start = fmax(0, center_idx - 40);
     int end = fmin(buffer_samples - 1, center_idx + 40);
-
     for (int i = start; i <= end; i++) {
         float dist = fabsf(i - center_idx) / 40.0f;
         float envelope = strength * (1.0f - dist);
         if (envelope < 0.05f) continue;
-
         float sum = waveform_buffer[i];
         float wsum = 1.0f;
         for (int j = 1; j <= kernel; j++) {
@@ -379,40 +414,32 @@ void apply_lowpass_soften(int center_idx, float strength) {
     }
 }
 
-// Simple 1-pole shelving filter brush
 void apply_shelving_brush(int center_idx, float gain_factor, float cutoff_norm, int is_low_shelf) {
     float strength = brush_intensity * gain_factor;
     if (strength < 0.02f) return;
-
     int radius = buffer_samples / current_window_width * 40;
     int start = fmax(0, center_idx - radius);
     int end = fmin(buffer_samples - 1, center_idx + radius);
-
-    float alpha = cutoff_norm;  // 0.1 = low, 0.9 = high
+    float alpha = cutoff_norm;
     if (is_low_shelf) alpha = 1.0f - alpha;
-
     float y1 = 0.0f;
-
     for (int i = start; i <= end; i++) {
         float dist = fabsf(i - center_idx) / (float)radius;
         if (dist >= 1.0f) continue;
         float weight = strength * (1.0f - dist * dist);
-
         float x = waveform_buffer[i];
         float y = alpha * x + (1.0f - alpha) * y1;
         y1 = y;
-
         float filtered = is_low_shelf ? y : (x - y);
         waveform_buffer[i] += filtered * weight;
-
         if (waveform_buffer[i] > AMPLITUDE) waveform_buffer[i] = AMPLITUDE;
         if (waveform_buffer[i] < -AMPLITUDE) waveform_buffer[i] = -AMPLITUDE;
     }
 }
 
 void apply_add_treble(int center_idx, float mouse_strength) {
-    float gain = 0.6f + mouse_strength * 1.2f;  // +6 to +18 dB feel
-    apply_shelving_brush(center_idx, gain, 0.85f, 0);  // high shelf boost
+    float gain = 0.6f + mouse_strength * 1.2f;
+    apply_shelving_brush(center_idx, gain, 0.85f, 0);
 }
 
 void apply_add_mid(int center_idx, float mouse_strength) {
@@ -420,7 +447,6 @@ void apply_add_mid(int center_idx, float mouse_strength) {
     int radius = buffer_samples / current_window_width * 50;
     int start = fmax(0, center_idx - radius);
     int end = fmin(buffer_samples - 1, center_idx + radius);
-
     for (int i = start; i <= end; i++) {
         float dist = fabsf(i - center_idx) / (float)radius;
         if (dist >= 1.0f) continue;
@@ -433,8 +459,8 @@ void apply_add_mid(int center_idx, float mouse_strength) {
 
 void apply_sub_bass(int center_idx, float mouse_strength) {
     float gain = 0.7f + mouse_strength * 1.3f;
-    apply_shelving_brush(center_idx, gain, 0.15f, 1);   // low shelf boost
-    apply_shelving_brush(center_idx, -0.3f - mouse_strength * 0.4f, 0.7f, 0); // gentle high cut
+    apply_shelving_brush(center_idx, gain, 0.15f, 1);
+    apply_shelving_brush(center_idx, -0.3f - mouse_strength * 0.4f, 0.7f, 0);
 }
 
 void draw_line(int start_idx, float start_val, int end_idx, float end_val) {
@@ -517,7 +543,14 @@ int main(int argc, char **argv) {
     waveform_buffer = calloc(buffer_samples, sizeof(float));
     phase_increment = (double)buffer_samples / (SAMPLE_RATE * DISPLAY_DURATION);
 
+    for (int i = 0; i < UNDO_LEVELS; i++) undo_stack[i] = NULL;
+    undo_stack[0] = malloc(buffer_samples * sizeof(float));
+
     generate_classic_waveform();
+    memcpy(undo_stack[0], waveform_buffer, buffer_samples * sizeof(float));
+    undo_index = 0;
+    undo_count = 1;
+
     init_buttons();
     reopen_audio_device();
 
@@ -528,19 +561,30 @@ int main(int argc, char **argv) {
     while (running) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = SDL_FALSE;
+
             else if (event.type == SDL_WINDOWEVENT && (event.window.event == SDL_WINDOWEVENT_RESIZED || event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
                 init_buttons();
             }
+
             else if (event.type == SDL_KEYDOWN) {
                 if (event.key.keysym.sym == SDLK_f || event.key.keysym.sym == SDLK_F11) toggle_fullscreen();
                 else if (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_q) running = SDL_FALSE;
                 else if (event.key.keysym.sym == SDLK_SPACE) { playing = !playing; if (playing) phase_accumulator = 0.0; }
-                else if (event.key.keysym.sym == SDLK_c) { current_type = CUSTOM; memset(waveform_buffer, 0, buffer_samples * sizeof(float)); }
+                else if (event.key.keysym.sym == SDLK_c) {
+                    current_type = CUSTOM;
+                    memset(waveform_buffer, 0, buffer_samples * sizeof(float));
+                    save_undo_state();
+                }
                 else if (current_type != CUSTOM) {
                     if (event.key.keysym.sym == SDLK_UP) { current_freq *= 1.1; generate_classic_waveform(); phase_accumulator = 0.0; }
                     if (event.key.keysym.sym == SDLK_DOWN) { current_freq = fmax(20.0, current_freq / 1.1); generate_classic_waveform(); phase_accumulator = 0.0; }
                 }
+                else if (event.key.keysym.mod & KMOD_CTRL) {
+                    if (event.key.keysym.sym == SDLK_z) undo();
+                    else if (event.key.keysym.sym == SDLK_y) redo();
+                }
             }
+
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
                 int mx = event.button.x, my = event.button.y;
                 int button_clicked = 0;
@@ -564,10 +608,19 @@ int main(int argc, char **argv) {
                     smear_width = fmax(0.0f, fmin(1.0f, smear_width)); button_clicked = 1;
                 }
 
+                // NEW: Undo / Redo button clicks
+                if (SDL_PointInRect(&(SDL_Point){mx,my}, &undo_button.rect)) {
+                    undo(); button_clicked = 1;
+                }
+                if (SDL_PointInRect(&(SDL_Point){mx,my}, &redo_button.rect)) {
+                    redo(); button_clicked = 1;
+                }
+
                 int waveform_top = (int)(current_window_height * WAVEFORM_TOP_MARGIN_RATIO);
                 int waveform_height = (int)(current_window_height * WAVEFORM_HEIGHT_RATIO);
                 if (!button_clicked && my >= waveform_top && my < waveform_top + waveform_height) {
                     current_type = CUSTOM;
+                    save_undo_state();
                     int idx = (int)((mx / (double)current_window_width) * buffer_samples);
                     if (draw_mode == DRAW_LINE || draw_mode == DRAW_SINE) {
                         if (line_start_idx == -1) {
@@ -607,12 +660,9 @@ int main(int argc, char **argv) {
                     int wave_y_center = waveform_top + waveform_height / 2;
                     double norm_y = (wave_y_center - my) / (waveform_height * 0.9);
                     norm_y = fmax(-1.0, fmin(1.0, norm_y));
-                    float mouse_strength = (norm_y > 0.0f) ? norm_y : 0.3f;  // stronger when brushing upward
+                    float mouse_strength = (norm_y > 0.0f) ? norm_y : 0.3f;
 
-                    if (draw_mode == DRAW_SMEAR) {
-                        smear_current_idx = idx;
-                        apply_smear(idx);
-                    }
+                    if (draw_mode == DRAW_SMEAR) { smear_current_idx = idx; apply_smear(idx); }
                     else if (draw_mode >= DRAW_ADD_SINE && draw_mode <= DRAW_ADD_TRIANGLE) {
                         float pitch_norm = (norm_y + 1.0) / 2.0;
                         int radius = buffer_samples / current_window_width * 30;
@@ -630,15 +680,9 @@ int main(int argc, char **argv) {
                         float soften_strength = brush_intensity * (norm_y < 0 ? (1.0f - norm_y) : 0.5f);
                         apply_lowpass_soften(idx, soften_strength);
                     }
-                    else if (draw_mode == DRAW_ADD_TREBLE) {
-                        apply_add_treble(idx, mouse_strength);
-                    }
-                    else if (draw_mode == DRAW_ADD_MID) {
-                        apply_add_mid(idx, mouse_strength);
-                    }
-                    else if (draw_mode == DRAW_SUB_BASS) {
-                        apply_sub_bass(idx, mouse_strength);
-                    }
+                    else if (draw_mode == DRAW_ADD_TREBLE) apply_add_treble(idx, mouse_strength);
+                    else if (draw_mode == DRAW_ADD_MID) apply_add_mid(idx, mouse_strength);
+                    else if (draw_mode == DRAW_SUB_BASS) apply_sub_bass(idx, mouse_strength);
                     else if (draw_mode != DRAW_LINE && draw_mode != DRAW_SINE) {
                         float value = (float)(norm_y * AMPLITUDE * 0.8);
                         int radius = buffer_samples / current_window_width * ((draw_mode == DRAW_SMOOTH || draw_mode == DRAW_ADD_SMOOTH || draw_mode == DRAW_BLEND) ? 25 : 15);
@@ -649,6 +693,7 @@ int main(int argc, char **argv) {
                 }
             }
             else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
+                if (drawing && current_type == CUSTOM) save_undo_state();
                 drawing = 0;
                 smear_start_idx = -1;
                 smear_max_distance = 0.0f;
@@ -661,7 +706,7 @@ int main(int argc, char **argv) {
         }
 
         if (current_type == CUSTOM)
-            snprintf(control_buttons[1].label, 32, "CUSTOM - All Tools Ready!");
+            snprintf(control_buttons[1].label, 32, "Undo (%d)  Redo (%d)", undo_count, UNDO_LEVELS - undo_count);
         else
             snprintf(control_buttons[1].label, 32, "Freq: %.1f Hz", current_freq);
 
@@ -715,6 +760,36 @@ int main(int argc, char **argv) {
             }
         }
 
+        // Render Undo and Redo buttons
+        SDL_SetRenderDrawColor(renderer, undo_count > 0 ? 70 : 40, 180, undo_count > 0 ? 255 : 120, 255);
+        SDL_RenderFillRect(renderer, &undo_button.rect);
+        SDL_SetRenderDrawColor(renderer, 220, 220, 255, 255);
+        SDL_RenderDrawRect(renderer, &undo_button.rect);
+
+        SDL_SetRenderDrawColor(renderer, undo_count < UNDO_LEVELS ? 70 : 40, undo_count < UNDO_LEVELS ? 220 : 120, 180, 255);
+        SDL_RenderFillRect(renderer, &redo_button.rect);
+        SDL_SetRenderDrawColor(renderer, 220, 220, 255, 255);
+        SDL_RenderDrawRect(renderer, &redo_button.rect);
+
+        if (font) {
+            SDL_Surface *surf = TTF_RenderText_Shaded(font, undo_button.label, (SDL_Color){255,255,255,255}, (SDL_Color){0,0,0,0});
+            if (surf) {
+                SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+                SDL_Rect dst = {undo_button.rect.x + (undo_button.rect.w - surf->w)/2, undo_button.rect.y + (undo_button.rect.h - surf->h)/2, surf->w, surf->h};
+                SDL_RenderCopy(renderer, tex, NULL, &dst);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+            surf = TTF_RenderText_Shaded(font, redo_button.label, (SDL_Color){255,255,255,255}, (SDL_Color){0,0,0,0});
+            if (surf) {
+                SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+                SDL_Rect dst = {redo_button.rect.x + (redo_button.rect.w - surf->w)/2, redo_button.rect.y + (redo_button.rect.h - surf->h)/2, surf->w, surf->h};
+                SDL_RenderCopy(renderer, tex, NULL, &dst);
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
+
         SDL_SetRenderDrawColor(renderer, 70, 70, 100, 255);
         SDL_RenderFillRect(renderer, &intensity_bar.rect);
         SDL_SetRenderDrawColor(renderer, 100, 200, 255, 255);
@@ -737,7 +812,7 @@ int main(int argc, char **argv) {
             surf = TTF_RenderText_Shaded(font, hint1, (SDL_Color){255,255,150,255}, (SDL_Color){0,0,0,0});
             if (surf) { SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf); SDL_Rect r = {20, 50, surf->w, surf->h}; SDL_RenderCopy(renderer, tex, NULL, &r); SDL_DestroyTexture(tex); SDL_FreeSurface(surf); }
 
-            const char *hint2 = "Add Treb | Add Mid | Sub Bass | Soften";
+            const char *hint2 = "Click Undo / Redo buttons  (or Ctrl+Z / Ctrl+Y)";
             surf = TTF_RenderText_Shaded(font, hint2, (SDL_Color){150,255,255,255}, (SDL_Color){0,0,0,0});
             if (surf) { SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf); SDL_Rect r = {20, 80, surf->w, surf->h}; SDL_RenderCopy(renderer, tex, NULL, &r); SDL_DestroyTexture(tex); SDL_FreeSurface(surf); }
         }
@@ -746,10 +821,11 @@ int main(int argc, char **argv) {
         SDL_Delay(16);
     }
 
-    if (audio_device != 0) SDL_CloseAudioDevice(audio_device);
+    for (int i = 0; i < UNDO_LEVELS; i++) if (undo_stack[i]) free(undo_stack[i]);
     free(waveform_buffer);
     if (font) TTF_CloseFont(font);
     TTF_Quit();
+    if (audio_device) SDL_CloseAudioDevice(audio_device);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
