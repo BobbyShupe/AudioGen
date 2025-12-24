@@ -12,12 +12,10 @@
 #define INITIAL_WINDOW_WIDTH 1400
 #define INITIAL_WINDOW_HEIGHT 800
 #define SAMPLE_RATE 48000
-#define BUFFER_SAMPLES 1024
 #define DISPLAY_DURATION 2.0
 #define AMPLITUDE 0.35
 #define DEFAULT_FREQ 440.0
 
-// Ratios for responsive layout
 #define WAVEFORM_TOP_MARGIN_RATIO 0.12
 #define WAVEFORM_HEIGHT_RATIO 0.55
 
@@ -26,7 +24,7 @@ typedef enum {
     DRAW_FREE, DRAW_LINE, DRAW_SINE, DRAW_SMOOTH,
     DRAW_ADD_FREE, DRAW_ADD_SMOOTH, DRAW_MULTIPLY, DRAW_AMPLIFY,
     DRAW_ADD_SINE, DRAW_ADD_SQUARE, DRAW_ADD_SAW, DRAW_ADD_TRIANGLE,
-    DRAW_BLEND, DRAW_SMEAR
+    DRAW_BLEND, DRAW_SMEAR, DRAW_SOFTEN
 } DrawMode;
 
 WaveType current_type = SINE;
@@ -46,7 +44,7 @@ typedef struct {
 } Button;
 
 Button wave_buttons[4];
-Button tool_buttons[14];
+Button tool_buttons[15];
 Button control_buttons[2];
 Button export_button;
 Button intensity_bar;
@@ -72,8 +70,6 @@ SDL_Window *window = NULL;
 SDL_Renderer *renderer = NULL;
 
 int fullscreen = 0;
-
-// Current window dimensions (updated on resize)
 int current_window_width = INITIAL_WINDOW_WIDTH;
 int current_window_height = INITIAL_WINDOW_HEIGHT;
 
@@ -139,7 +135,7 @@ void reopen_audio_device(void) {
     want.freq = SAMPLE_RATE;
     want.format = AUDIO_F32;
     want.channels = 1;
-    want.samples = BUFFER_SAMPLES;
+    want.samples = 1024;
     want.callback = audio_callback;
 
     audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
@@ -167,11 +163,9 @@ void init_buttons() {
     const int spacing_h = 15;
     const int spacing_v = 2;
 
-    // Waveform area (responsive)
     int waveform_top = (int)(current_window_height * WAVEFORM_TOP_MARGIN_RATIO);
     int waveform_height = (int)(current_window_height * WAVEFORM_HEIGHT_RATIO);
 
-    // Left panel layout: 4 rows from bottom up
     int bottom_row_y = current_window_height - margin - btn_h;
 
     int row_y[4];
@@ -182,29 +176,20 @@ void init_buttons() {
 
     int left_x = margin;
 
-    // Wave type buttons (topmost row on left)
     wave_buttons[0] = make_button(left_x + 0*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Sine");
     wave_buttons[1] = make_button(left_x + 1*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Square");
     wave_buttons[2] = make_button(left_x + 2*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Sawtooth");
     wave_buttons[3] = make_button(left_x + 3*(btn_w+spacing_h), row_y[0], btn_w, btn_h, "Triangle");
 
-    // Tool rows
     const char* row1_labels[5] = {"Free Draw", "Line", "Sine Seg", "Smooth", "Add Free"};
-    for (int i = 0; i < 5; i++) {
-        tool_buttons[i] = make_button(left_x + i*(btn_w+spacing_h), row_y[1], btn_w, btn_h, row1_labels[i]);
-    }
+    for (int i = 0; i < 5; i++) tool_buttons[i] = make_button(left_x + i*(btn_w+spacing_h), row_y[1], btn_w, btn_h, row1_labels[i]);
 
     const char* row2_labels[5] = {"Add Smooth", "Multiply", "Amplify", "Add Sine", "Add Square"};
-    for (int i = 0; i < 5; i++) {
-        tool_buttons[5+i] = make_button(left_x + i*(btn_w+spacing_h), row_y[2], btn_w, btn_h, row2_labels[i]);
-    }
+    for (int i = 0; i < 5; i++) tool_buttons[5+i] = make_button(left_x + i*(btn_w+spacing_h), row_y[2], btn_w, btn_h, row2_labels[i]);
 
-    const char* row3_labels[4] = {"Add Saw", "Add Tri", "Blend", "Smear"};
-    for (int i = 0; i < 4; i++) {
-        tool_buttons[10+i] = make_button(left_x + i*(btn_w+spacing_h), row_y[3], btn_w, btn_h, row3_labels[i]);
-    }
+    const char* row3_labels[5] = {"Add Saw", "Add Tri", "Blend", "Smear", "Soften"};
+    for (int i = 0; i < 5; i++) tool_buttons[10+i] = make_button(left_x + i*(btn_w+spacing_h), row_y[3], btn_w, btn_h, row3_labels[i]);
 
-    // Right-side controls
     int right_margin = margin + 20;
     int control_w = 240;
     int control_h = 60;
@@ -215,21 +200,11 @@ void init_buttons() {
 
     export_button = make_button(right_x, waveform_top + 20, control_w, control_h, "Export WAV");
 
-    control_buttons[0] = make_button(right_x,
-                                     current_window_height - margin - control_h - 80,
-                                     control_w, control_h, "Play / Pause");
+    control_buttons[0] = make_button(right_x, current_window_height - margin - control_h - 80, control_w, control_h, "Play / Pause");
+    control_buttons[1] = make_button(right_x, current_window_height - margin - control_h, control_w + 50, 50, "Freq: 440.0 Hz");
 
-    control_buttons[1] = make_button(right_x,
-                                     current_window_height - margin - control_h,
-                                     control_w + 50, 50, "Freq: 440.0 Hz");
-
-    intensity_bar = make_button(current_window_width - right_margin - bar_w,
-                                export_button.rect.y + control_h + 30,
-                                bar_w, bar_h, "Intensity");
-
-    smear_width_bar = make_button(current_window_width - right_margin - bar_w,
-                                  intensity_bar.rect.y + bar_h + 20,
-                                  bar_w, bar_h, "Smear Width");
+    intensity_bar = make_button(current_window_width - right_margin - bar_w, export_button.rect.y + control_h + 30, bar_w, bar_h, "Intensity");
+    smear_width_bar = make_button(current_window_width - right_margin - bar_w, intensity_bar.rect.y + bar_h + 20, bar_w, bar_h, "Smear Width");
 }
 
 void export_wav() {
@@ -259,11 +234,10 @@ void export_wav() {
     uint32_t chunk_size = 36 + data_size;
     fwrite(&chunk_size, 4, 1, f);
     fwrite("WAVE", 1, 4, f);
-
     fwrite("fmt ", 1, 4, f);
     uint32_t fmt_size = 16;
     fwrite(&fmt_size, 4, 1, f);
-    uint16_t audio_format = 3;
+    uint16_t audio_format = 3; // IEEE float
     uint16_t num_channels = 1;
     uint16_t bits_per_sample = 32;
     uint16_t block_align = 4;
@@ -273,56 +247,41 @@ void export_wav() {
     fwrite(&byte_rate, 4, 1, f);
     fwrite(&block_align, 2, 1, f);
     fwrite(&bits_per_sample, 2, 1, f);
-
     fwrite("data", 1, 4, f);
     fwrite(&data_size, 4, 1, f);
     fwrite(waveform_buffer, 4, num_samples, f);
 
     fclose(f);
-
     snprintf(export_button.label, 32, "Saved %03d.wav", export_count);
 }
 
 void apply_smear(int curr_idx) {
     if (smear_start_idx == -1) return;
-
     int direction = (curr_idx > smear_start_idx) ? 1 : -1;
     int current_distance = abs(curr_idx - smear_start_idx);
-
     if (current_distance < 30) return;
-
-    if (current_distance > smear_max_distance) {
-        smear_max_distance = current_distance;
-    }
+    if (current_distance > smear_max_distance) smear_max_distance = current_distance;
 
     float max_fade = buffer_samples * 0.35f;
     float fade_factor = 1.0f - fmin(1.0f, smear_max_distance / max_fade);
     float intensity = brush_intensity * fade_factor * 1.2f;
-
     if (intensity <= 0.01f) return;
 
     int copy_half_len = (int)(50 + smear_width * 350);
-    int capture_start = smear_start_idx - copy_half_len;
-    int capture_end = smear_start_idx + copy_half_len;
-    capture_start = fmax(0, capture_start);
-    capture_end = fmin(buffer_samples - 1, capture_end);
+    int capture_start = fmax(0, smear_start_idx - copy_half_len);
+    int capture_end = fmin(buffer_samples - 1, smear_start_idx + copy_half_len);
     int copy_len = capture_end - capture_start + 1;
-
     int paste_start = smear_start_idx + direction * current_distance;
 
     for (int offset = 0; offset < copy_len; offset++) {
         int src_idx = capture_start + offset;
         int dst_idx = paste_start + offset * direction;
-
         if (dst_idx < 0 || dst_idx >= buffer_samples) continue;
-
         float dist_ratio = (float)abs(dst_idx - smear_start_idx) / (current_distance + copy_len);
         float weight = intensity * (1.0f - dist_ratio);
-
         if (weight > 0.01f) {
             float copied = waveform_buffer[src_idx];
             waveform_buffer[dst_idx] += copied * weight;
-
             if (waveform_buffer[dst_idx] > AMPLITUDE) waveform_buffer[dst_idx] = AMPLITUDE;
             if (waveform_buffer[dst_idx] < -AMPLITUDE) waveform_buffer[dst_idx] = -AMPLITUDE;
         }
@@ -333,7 +292,6 @@ void apply_brush(int center_idx, float target_val, int radius, float base_streng
     float strength = base_strength * brush_intensity;
     int start = fmax(0, center_idx - radius);
     int end = fmin(buffer_samples - 1, center_idx + radius);
-
     for (int i = start; i <= end; i++) {
         float dist = fabsf(i - center_idx) / (float)radius;
         if (dist < 1.0f) {
@@ -343,7 +301,6 @@ void apply_brush(int center_idx, float target_val, int radius, float base_streng
             if (mode == 0) new_val = current * (1.0f - weight) + target_val * weight;
             else if (mode == 1) new_val = current + target_val * weight;
             else new_val = current + (target_val - current) * weight * 0.7f;
-
             if (new_val > AMPLITUDE) new_val = AMPLITUDE;
             if (new_val < -AMPLITUDE) new_val = -AMPLITUDE;
             waveform_buffer[i] = new_val;
@@ -355,7 +312,6 @@ void apply_multiply(int center_idx, float factor, int radius) {
     float strength = brush_intensity;
     int start = fmax(0, center_idx - radius);
     int end = fmin(buffer_samples - 1, center_idx + radius);
-
     for (int i = start; i <= end; i++) {
         float dist = fabsf(i - center_idx) / (float)radius;
         if (dist < 1.0f) {
@@ -371,17 +327,13 @@ void apply_additive_wave(int center_idx, float pitch_norm, int radius, int wave_
     float strength = brush_intensity * 0.8f;
     int start = fmax(0, center_idx - radius);
     int end = fmin(buffer_samples - 1, center_idx + radius);
-
     double base_freq = 50.0 + pitch_norm * 400.0;
-
     for (int i = start; i <= end; i++) {
         float dist = fabsf(i - center_idx) / (float)radius;
         if (dist >= 1.0f) continue;
         float weight = strength * (1.0f - dist * dist);
-
         double pos = (i - start) / (double)(end - start + 1);
         double phase = pos * 2.0 * M_PI;
-
         float sample = 0.0f;
         if (wave_type == 0) sample = (float)sin(phase + base_freq * pos * 0.1);
         else if (wave_type == 1) sample = (fmod(phase * base_freq * 0.05, 2.0 * M_PI) < M_PI) ? 1.0f : -1.0f;
@@ -390,18 +342,47 @@ void apply_additive_wave(int center_idx, float pitch_norm, int radius, int wave_
             double tri = fmod(phase * base_freq * 0.05 / (2.0 * M_PI), 1.0);
             sample = (tri < 0.5) ? (4.0f * tri - 1.0f) : (3.0f - 4.0f * tri);
         }
-
         waveform_buffer[i] += sample * weight * AMPLITUDE * 0.6f;
-
         if (waveform_buffer[i] > AMPLITUDE) waveform_buffer[i] = AMPLITUDE;
         if (waveform_buffer[i] < -AMPLITUDE) waveform_buffer[i] = -AMPLITUDE;
+    }
+}
+
+// FIXED & FAST Soften: pure low-pass smoothing, no silencing, no lag
+void apply_lowpass_soften(int center_idx, float strength) {
+    if (strength < 0.05f) return;
+
+    int kernel = (int)(6 + strength * 20);  // 6 to ~26 samples wide
+    int start = fmax(0, center_idx - 40);
+    int end = fmin(buffer_samples - 1, center_idx + 40);
+
+    for (int i = start; i <= end; i++) {
+        float dist = fabsf(i - center_idx) / 40.0f;
+        float envelope = strength * (1.0f - dist);
+        if (envelope < 0.05f) continue;
+
+        float sum = waveform_buffer[i];
+        float wsum = 1.0f;
+        for (int j = 1; j <= kernel; j++) {
+            if (i - j >= 0) {
+                float w = 1.0f - (float)j / (kernel + 1);
+                sum += waveform_buffer[i - j] * w;
+                wsum += w;
+            }
+            if (i + j < buffer_samples) {
+                float w = 1.0f - (float)j / (kernel + 1);
+                sum += waveform_buffer[i + j] * w;
+                wsum += w;
+            }
+        }
+        float smoothed = sum / wsum;
+        waveform_buffer[i] = waveform_buffer[i] * (1.0f - envelope) + smoothed * envelope;
     }
 }
 
 void draw_line(int start_idx, float start_val, int end_idx, float end_val) {
     int steps = abs(end_idx - start_idx);
     if (steps == 0) return;
-
     float dx = (float)(end_idx - start_idx);
     for (int i = 0; i <= steps; i++) {
         float t = i / (float)steps;
@@ -414,14 +395,9 @@ void draw_line(int start_idx, float start_val, int end_idx, float end_val) {
 
 void draw_sine_segment(int start_idx, float start_val, int end_idx, float end_val, int additive) {
     int steps = abs(end_idx - start_idx);
-    if (steps < 10) {
-        draw_line(start_idx, start_val, end_idx, end_val);
-        return;
-    }
-
+    if (steps < 10) { draw_line(start_idx, start_val, end_idx, end_val); return; }
     float offset = (start_val + end_val) / 2.0f;
     float amplitude = fabsf(start_val - end_val) / 2.0f + 0.05f * AMPLITUDE;
-
     float dx = (float)(end_idx - start_idx);
     for (int i = 0; i <= steps; i++) {
         float t = i / (float)steps;
@@ -429,11 +405,8 @@ void draw_sine_segment(int start_idx, float start_val, int end_idx, float end_va
         if (idx < 0 || idx >= buffer_samples) continue;
         double phase = t * 2.0 * M_PI;
         float val = offset + (float)sin(phase) * amplitude;
-        if (additive) {
-            waveform_buffer[idx] += val * brush_intensity;
-        } else {
-            waveform_buffer[idx] = val * brush_intensity + waveform_buffer[idx] * (1.0f - brush_intensity);
-        }
+        if (additive) waveform_buffer[idx] += val * brush_intensity;
+        else waveform_buffer[idx] = val * brush_intensity + waveform_buffer[idx] * (1.0f - brush_intensity);
         if (waveform_buffer[idx] > AMPLITUDE) waveform_buffer[idx] = AMPLITUDE;
         if (waveform_buffer[idx] < -AMPLITUDE) waveform_buffer[idx] = -AMPLITUDE;
     }
@@ -443,20 +416,15 @@ void render_buttons(SDL_Renderer *renderer, Button *buttons, int count, int acti
     for (int i = 0; i < count; i++) {
         Button *b = &buttons[i];
         int active = (i == active_idx);
-        SDL_SetRenderDrawColor(renderer, active ? 100 : 60,
-                               active ? 220 : 70,
-                               active ? 160 : 100, 255);
+        SDL_SetRenderDrawColor(renderer, active ? 100 : 60, active ? 220 : 70, active ? 160 : 100, 255);
         SDL_RenderFillRect(renderer, &b->rect);
         SDL_SetRenderDrawColor(renderer, 220, 220, 255, 255);
         SDL_RenderDrawRect(renderer, &b->rect);
-
         if (font) {
             SDL_Surface *surf = TTF_RenderText_Shaded(font, b->label, (SDL_Color){255,255,255,255}, (SDL_Color){0,0,0,0});
             if (surf) {
                 SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
-                SDL_Rect dst = {b->rect.x + (b->rect.w - surf->w)/2,
-                                b->rect.y + (b->rect.h - surf->h)/2,
-                                surf->w, surf->h};
+                SDL_Rect dst = {b->rect.x + (b->rect.w - surf->w)/2, b->rect.y + (b->rect.h - surf->h)/2, surf->w, surf->h};
                 SDL_RenderCopy(renderer, tex, NULL, &dst);
                 SDL_DestroyTexture(tex);
                 SDL_FreeSurface(surf);
@@ -473,7 +441,6 @@ void toggle_fullscreen() {
         SDL_SetWindowSize(window, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT);
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
-    // Ensure layout updates after fullscreen change
     SDL_Delay(100);
     init_buttons();
 }
@@ -485,10 +452,8 @@ int main(int argc, char **argv) {
     font = TTF_OpenFont("/usr/share/fonts/TTF/DejaVuSans.ttf", 14);
     if (!font) fprintf(stderr, "Font not loaded.\n");
 
-    window = SDL_CreateWindow("Waveform Editor - Responsive Layout",
-                              SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                              INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT,
-                              SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    window = SDL_CreateWindow("Waveform Editor", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                              INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 
     buffer_samples = (int)(SAMPLE_RATE * DISPLAY_DURATION);
@@ -496,149 +461,83 @@ int main(int argc, char **argv) {
     phase_increment = (double)buffer_samples / (SAMPLE_RATE * DISPLAY_DURATION);
 
     generate_classic_waveform();
-    phase_accumulator = 0.0;
-
     init_buttons();
     reopen_audio_device();
 
     SDL_bool running = SDL_TRUE;
     SDL_Event event;
-
-    static Uint32 export_time = 0;
+    Uint32 export_time = 0;
 
     while (running) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = SDL_FALSE;
-
-            else if (event.type == SDL_WINDOWEVENT) {
-                if (event.window.event == SDL_WINDOWEVENT_RESIZED ||
-                    event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-                    init_buttons();  // Re-layout everything on resize
-                }
+            else if (event.type == SDL_WINDOWEVENT && (event.window.event == SDL_WINDOWEVENT_RESIZED || event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)) {
+                init_buttons();
             }
-
             else if (event.type == SDL_KEYDOWN) {
-                if (event.key.keysym.sym == SDLK_f || event.key.keysym.sym == SDLK_F11) {
-                    toggle_fullscreen();
-                }
+                if (event.key.keysym.sym == SDLK_f || event.key.keysym.sym == SDLK_F11) toggle_fullscreen();
                 else if (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_q) running = SDL_FALSE;
-                else if (event.key.keysym.sym == SDLK_SPACE) {
-                    playing = !playing;
-                    if (playing) phase_accumulator = 0.0;
-                }
-                else if (event.key.keysym.sym == SDLK_c) {
-                    current_type = CUSTOM;
-                    memset(waveform_buffer, 0, buffer_samples * sizeof(float));
-                }
+                else if (event.key.keysym.sym == SDLK_SPACE) { playing = !playing; if (playing) phase_accumulator = 0.0; }
+                else if (event.key.keysym.sym == SDLK_c) { current_type = CUSTOM; memset(waveform_buffer, 0, buffer_samples * sizeof(float)); }
                 else if (current_type != CUSTOM) {
-                    if (event.key.keysym.sym == SDLK_UP) {
-                        current_freq *= 1.1;
-                        generate_classic_waveform();
-                        phase_accumulator = 0.0;
-                    }
-                    if (event.key.keysym.sym == SDLK_DOWN) {
-                        current_freq = fmax(20.0, current_freq / 1.1);
-                        generate_classic_waveform();
-                        phase_accumulator = 0.0;
-                    }
+                    if (event.key.keysym.sym == SDLK_UP) { current_freq *= 1.1; generate_classic_waveform(); phase_accumulator = 0.0; }
+                    if (event.key.keysym.sym == SDLK_DOWN) { current_freq = fmax(20.0, current_freq / 1.1); generate_classic_waveform(); phase_accumulator = 0.0; }
                 }
             }
-
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-                int mx = event.button.x;
-                int my = event.button.y;
-
+                int mx = event.button.x, my = event.button.y;
                 int button_clicked = 0;
 
-                for (int i = 0; i < 4; i++) {
-                    if (SDL_PointInRect(&(SDL_Point){mx,my}, &wave_buttons[i].rect)) {
-                        current_type = (WaveType)i;
-                        generate_classic_waveform();
-                        phase_accumulator = 0.0;
-                        button_clicked = 1;
-                    }
+                for (int i = 0; i < 4; i++) if (SDL_PointInRect(&(SDL_Point){mx,my}, &wave_buttons[i].rect)) {
+                    current_type = (WaveType)i; generate_classic_waveform(); phase_accumulator = 0.0; button_clicked = 1;
                 }
-
-                for (int i = 0; i < 14; i++) {
-                    if (SDL_PointInRect(&(SDL_Point){mx,my}, &tool_buttons[i].rect)) {
-                        draw_mode = (DrawMode)i;
-                        line_start_idx = -1;
-                        smear_start_idx = -1;
-                        smear_max_distance = 0.0f;
-                        button_clicked = 1;
-                    }
+                for (int i = 0; i < 15; i++) if (SDL_PointInRect(&(SDL_Point){mx,my}, &tool_buttons[i].rect)) {
+                    draw_mode = (DrawMode)i; line_start_idx = -1; smear_start_idx = -1; smear_max_distance = 0.0f; button_clicked = 1;
                 }
-
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &control_buttons[0].rect)) {
-                    playing = !playing;
-                    snprintf(control_buttons[0].label, 32, playing ? "Play / Pause" : "Paused");
-                    if (playing) phase_accumulator = 0.0;
-                    button_clicked = 1;
+                    playing = !playing; if (playing) phase_accumulator = 0.0; button_clicked = 1;
                 }
-
-                if (SDL_PointInRect(&(SDL_Point){mx,my}, &export_button.rect)) {
-                    export_wav();
-                    export_time = SDL_GetTicks();
-                    button_clicked = 1;
-                }
-
+                if (SDL_PointInRect(&(SDL_Point){mx,my}, &export_button.rect)) { export_wav(); export_time = SDL_GetTicks(); button_clicked = 1; }
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &intensity_bar.rect)) {
                     brush_intensity = (mx - intensity_bar.rect.x) / (float)intensity_bar.rect.w;
-                    brush_intensity = fmax(0.0f, fmin(1.0f, brush_intensity));
-                    button_clicked = 1;
+                    brush_intensity = fmax(0.0f, fmin(1.0f, brush_intensity)); button_clicked = 1;
                 }
-
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &smear_width_bar.rect)) {
                     smear_width = (mx - smear_width_bar.rect.x) / (float)smear_width_bar.rect.w;
-                    smear_width = fmax(0.0f, fmin(1.0f, smear_width));
-                    button_clicked = 1;
+                    smear_width = fmax(0.0f, fmin(1.0f, smear_width)); button_clicked = 1;
                 }
 
                 int waveform_top = (int)(current_window_height * WAVEFORM_TOP_MARGIN_RATIO);
                 int waveform_height = (int)(current_window_height * WAVEFORM_HEIGHT_RATIO);
-
                 if (!button_clicked && my >= waveform_top && my < waveform_top + waveform_height) {
                     current_type = CUSTOM;
-
                     int idx = (int)((mx / (double)current_window_width) * buffer_samples);
-
                     if (draw_mode == DRAW_LINE || draw_mode == DRAW_SINE) {
                         if (line_start_idx == -1) {
                             line_start_idx = idx;
-                            int wave_y_center = waveform_top + waveform_height / 2;
-                            double norm_y = (wave_y_center - my) / (waveform_height * 0.9);
+                            double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
                             norm_y = fmax(-1.0, fmin(1.0, norm_y));
                             line_start_val = (float)(norm_y * AMPLITUDE * 0.8);
                         } else {
-                            int wave_y_center = waveform_top + waveform_height / 2;
-                            double norm_y = (wave_y_center - my) / (waveform_height * 0.9);
+                            double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
                             norm_y = fmax(-1.0, fmin(1.0, norm_y));
                             float end_val = (float)(norm_y * AMPLITUDE * 0.8);
-                            if (draw_mode == DRAW_LINE)
-                                draw_line(line_start_idx, line_start_val, idx, end_val);
-                            else
-                                draw_sine_segment(line_start_idx, line_start_val, idx, end_val, 0);
+                            if (draw_mode == DRAW_LINE) draw_line(line_start_idx, line_start_val, idx, end_val);
+                            else draw_sine_segment(line_start_idx, line_start_val, idx, end_val, 0);
                             line_start_idx = -1;
                         }
                     } else {
                         drawing = 1;
-                        if (draw_mode == DRAW_SMEAR) {
-                            smear_start_idx = idx;
-                            smear_current_idx = idx;
-                            smear_max_distance = 0.0f;
-                        }
+                        if (draw_mode == DRAW_SMEAR) { smear_start_idx = idx; smear_current_idx = idx; smear_max_distance = 0.0f; }
                     }
                 }
             }
             else if (event.type == SDL_MOUSEMOTION && event.motion.state & SDL_BUTTON_LMASK) {
-                int mx = event.motion.x;
-                int my = event.motion.y;
-
+                int mx = event.motion.x, my = event.motion.y;
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &intensity_bar.rect)) {
                     brush_intensity = (mx - intensity_bar.rect.x) / (float)intensity_bar.rect.w;
                     brush_intensity = fmax(0.0f, fmin(1.0f, brush_intensity));
                 }
-
                 if (SDL_PointInRect(&(SDL_Point){mx,my}, &smear_width_bar.rect)) {
                     smear_width = (mx - smear_width_bar.rect.x) / (float)smear_width_bar.rect.w;
                     smear_width = fmax(0.0f, fmin(1.0f, smear_width));
@@ -646,43 +545,40 @@ int main(int argc, char **argv) {
 
                 int waveform_top = (int)(current_window_height * WAVEFORM_TOP_MARGIN_RATIO);
                 int waveform_height = (int)(current_window_height * WAVEFORM_HEIGHT_RATIO);
-
                 if (drawing && my >= waveform_top && my < waveform_top + waveform_height) {
                     int idx = (int)((mx / (double)current_window_width) * buffer_samples);
 
-                    if (draw_mode == DRAW_SMEAR) {
-                        smear_current_idx = idx;
-                        apply_smear(idx);
-                    } else if (draw_mode >= DRAW_ADD_SINE && draw_mode <= DRAW_ADD_TRIANGLE) {
-                        int wave_y_center = waveform_top + waveform_height / 2;
-                        double norm_y = (wave_y_center - my) / (waveform_height * 0.9);
+                    if (draw_mode == DRAW_SMEAR) { smear_current_idx = idx; apply_smear(idx); }
+                    else if (draw_mode >= DRAW_ADD_SINE && draw_mode <= DRAW_ADD_TRIANGLE) {
+                        double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
                         norm_y = fmax(-1.0, fmin(1.0, norm_y));
                         float pitch_norm = (norm_y + 1.0) / 2.0;
                         int radius = buffer_samples / current_window_width * 30;
                         int wave_type = draw_mode - DRAW_ADD_SINE;
                         apply_additive_wave(idx, pitch_norm, radius, wave_type);
-                    } else if (draw_mode == DRAW_MULTIPLY || draw_mode == DRAW_AMPLIFY) {
-                        int wave_y_center = waveform_top + waveform_height / 2;
-                        double norm_y = (wave_y_center - my) / (waveform_height * 0.9);
+                    }
+                    else if (draw_mode == DRAW_MULTIPLY || draw_mode == DRAW_AMPLIFY) {
+                        double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
                         norm_y = fmax(-1.0, fmin(1.0, norm_y));
-
-                        float factor;
-                        if (draw_mode == DRAW_AMPLIFY) {
-                            factor = (norm_y > 0) ? (1.0f + norm_y * 3.0f) : (1.0f + norm_y * 0.8f);
-                        } else {
-                            factor = (norm_y > 0) ? 1.5f : 0.7f;
-                        }
+                        float factor = (draw_mode == DRAW_AMPLIFY) ? (norm_y > 0 ? 1.0f + norm_y * 3.0f : 1.0f + norm_y * 0.8f) : (norm_y > 0 ? 1.5f : 0.7f);
                         int radius = buffer_samples / current_window_width * 25;
                         apply_multiply(idx, factor, radius);
-                    } else if (draw_mode != DRAW_LINE && draw_mode != DRAW_SINE) {
-                        int wave_y_center = waveform_top + waveform_height / 2;
-                        double norm_y = (wave_y_center - my) / (waveform_height * 0.9);
+                    }
+                    else if (draw_mode == DRAW_SOFTEN) {
+                        double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
+                        norm_y = fmax(-1.0, fmin(1.0, norm_y));
+                        float mouse_strength = (norm_y < 0.0f) ? (1.0f - norm_y) : 0.4f;  // stronger below center
+                        float total_strength = brush_intensity * mouse_strength;
+                        apply_lowpass_soften(idx, total_strength);
+                    }
+                    else if (draw_mode != DRAW_LINE && draw_mode != DRAW_SINE) {
+                        double norm_y = ((waveform_top + waveform_height / 2) - my) / (waveform_height * 0.9);
                         norm_y = fmax(-1.0, fmin(1.0, norm_y));
                         float value = (float)(norm_y * AMPLITUDE * 0.8);
                         int radius = buffer_samples / current_window_width * ((draw_mode == DRAW_SMOOTH || draw_mode == DRAW_ADD_SMOOTH || draw_mode == DRAW_BLEND) ? 25 : 15);
-                        float strength = (draw_mode == DRAW_SMOOTH || draw_mode == DRAW_ADD_SMOOTH || draw_mode == DRAW_BLEND) ? 0.6f : 1.0f;
-                        int mode = (draw_mode == DRAW_BLEND) ? 2 : (draw_mode == DRAW_ADD_FREE || draw_mode == DRAW_ADD_SMOOTH) ? 1 : 0;
-                        apply_brush(idx, value, radius, strength, mode);
+                        float bstrength = (draw_mode == DRAW_SMOOTH || draw_mode == DRAW_ADD_SMOOTH || draw_mode == DRAW_BLEND) ? 0.6f : 1.0f;
+                        int mode = (draw_mode == DRAW_BLEND) ? 2 : ((draw_mode == DRAW_ADD_FREE || draw_mode == DRAW_ADD_SMOOTH) ? 1 : 0);
+                        apply_brush(idx, value, radius, bstrength, mode);
                     }
                 }
             }
@@ -730,87 +626,51 @@ int main(int argc, char **argv) {
             SDL_SetRenderDrawColor(renderer, 255, 80, 80, 255);
             for (int o = -3; o <= 3; o++) {
                 int x = cursor_x + o;
-                if (x >= 0 && x < current_window_width)
-                    SDL_RenderDrawLine(renderer, x, waveform_top, x, waveform_top + waveform_height);
+                if (x >= 0 && x < current_window_width) SDL_RenderDrawLine(renderer, x, waveform_top, x, waveform_top + waveform_height);
             }
         }
 
         render_buttons(renderer, wave_buttons, 4, current_type);
-        render_buttons(renderer, tool_buttons, 14, draw_mode);
+        render_buttons(renderer, tool_buttons, 15, draw_mode);
         render_buttons(renderer, control_buttons, 2, playing ? 0 : -1);
 
-        // Export button
         SDL_SetRenderDrawColor(renderer, 80, 180, 100, 255);
         SDL_RenderFillRect(renderer, &export_button.rect);
         SDL_SetRenderDrawColor(renderer, 220, 220, 255, 255);
         SDL_RenderDrawRect(renderer, &export_button.rect);
-
         if (font) {
             SDL_Surface *surf = TTF_RenderText_Shaded(font, export_button.label, (SDL_Color){255,255,255,255}, (SDL_Color){0,0,0,0});
             if (surf) {
                 SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
-                SDL_Rect dst = {export_button.rect.x + (export_button.rect.w - surf->w)/2,
-                                export_button.rect.y + (export_button.rect.h - surf->h)/2,
-                                surf->w, surf->h};
+                SDL_Rect dst = {export_button.rect.x + (export_button.rect.w - surf->w)/2, export_button.rect.y + (export_button.rect.h - surf->h)/2, surf->w, surf->h};
                 SDL_RenderCopy(renderer, tex, NULL, &dst);
                 SDL_DestroyTexture(tex);
                 SDL_FreeSurface(surf);
             }
         }
 
-        // Intensity bar
+        // bars
         SDL_SetRenderDrawColor(renderer, 70, 70, 100, 255);
         SDL_RenderFillRect(renderer, &intensity_bar.rect);
         SDL_SetRenderDrawColor(renderer, 100, 200, 255, 255);
-        SDL_Rect fill = intensity_bar.rect;
-        fill.w = (int)(fill.w * brush_intensity);
-        SDL_RenderFillRect(renderer, &fill);
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        SDL_RenderDrawRect(renderer, &intensity_bar.rect);
+        SDL_Rect fill = intensity_bar.rect; fill.w = (int)(fill.w * brush_intensity); SDL_RenderFillRect(renderer, &fill);
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255); SDL_RenderDrawRect(renderer, &intensity_bar.rect);
 
-        // Smear Width bar
         SDL_SetRenderDrawColor(renderer, 70, 70, 100, 255);
         SDL_RenderFillRect(renderer, &smear_width_bar.rect);
         SDL_SetRenderDrawColor(renderer, 255, 150, 100, 255);
-        fill = smear_width_bar.rect;
-        fill.w = (int)(fill.w * smear_width);
-        SDL_RenderFillRect(renderer, &fill);
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        SDL_RenderDrawRect(renderer, &smear_width_bar.rect);
+        fill = smear_width_bar.rect; fill.w = (int)(fill.w * smear_width); SDL_RenderFillRect(renderer, &fill);
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255); SDL_RenderDrawRect(renderer, &smear_width_bar.rect);
 
         if (font) {
-            char intens_text[32];
-            snprintf(intens_text, 32, "Brush Intensity: %.0f%%", brush_intensity * 100);
-            SDL_Surface *surf = TTF_RenderText_Shaded(font, intens_text, (SDL_Color){200,255,200,255}, (SDL_Color){0,0,0,0});
-            if (surf) {
-                SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
-                SDL_Rect r = {intensity_bar.rect.x, intensity_bar.rect.y - 30, surf->w, surf->h};
-                SDL_RenderCopy(renderer, tex, NULL, &r);
-                SDL_DestroyTexture(tex);
-                SDL_FreeSurface(surf);
-            }
+            char txt[64];
+            snprintf(txt, 64, "Brush Intensity: %.0f%%", brush_intensity * 100);
+            SDL_Surface *surf = TTF_RenderText_Shaded(font, txt, (SDL_Color){200,255,200,255}, (SDL_Color){0,0,0,0});
+            if (surf) { SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf); SDL_Rect r = {intensity_bar.rect.x, intensity_bar.rect.y - 30, surf->w, surf->h}; SDL_RenderCopy(renderer, tex, NULL, &r); SDL_DestroyTexture(tex); SDL_FreeSurface(surf); }
 
-            int copy_samples = (int)(50 + smear_width * 350);
-            char width_text[32];
-            snprintf(width_text, 32, "Smear Width: %d samples", copy_samples);
-            surf = TTF_RenderText_Shaded(font, width_text, (SDL_Color){255,200,100,255}, (SDL_Color){0,0,0,0});
-            if (surf) {
-                SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
-                SDL_Rect r = {smear_width_bar.rect.x, smear_width_bar.rect.y - 30, surf->w, surf->h};
-                SDL_RenderCopy(renderer, tex, NULL, &r);
-                SDL_DestroyTexture(tex);
-                SDL_FreeSurface(surf);
-            }
-
-            const char *inst = "Amplify tool added — brush up to boost volume!";
-            surf = TTF_RenderText_Shaded(font, inst, (SDL_Color){100,255,200,255}, (SDL_Color){0,0,0,0});
-            if (surf) {
-                SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
-                SDL_Rect r = {20, 50, surf->w, surf->h};
-                SDL_RenderCopy(renderer, tex, NULL, &r);
-                SDL_DestroyTexture(tex);
-                SDL_FreeSurface(surf);
-            }
+            const char *hint = "Soften: brush lower = stronger treble reduction (smooth & safe now!)";
+            surf = TTF_RenderText_Shaded(font, hint, (SDL_Color){255,200,100,255}, (SDL_Color){0,0,0,0});
+            if (surf) { SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf); SDL_Rect r = {20, 80, surf->w, surf->h}; SDL_RenderCopy(renderer, tex, NULL, &r); SDL_DestroyTexture(tex); SDL_FreeSurface(surf); }
         }
 
         SDL_RenderPresent(renderer);
